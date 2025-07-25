@@ -4,6 +4,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
+# Unified split utilities
+from .split_utils import get_split_sizes, DEFAULT_SPLIT_FRAC
 from typing import Optional, Tuple, Dict, Any, List
 
 # Dynamic data path resolution (e.g., Kaggle input datasets)
@@ -54,7 +56,7 @@ class JenaClimateDataset(Dataset):
         csv_path: str,
         input_len: int = 96,
         output_len: int = 24,
-        split_frac: Dict[str, float] = {'train': 0.7, 'val': 0.2, 'test': 0.1},
+        split_frac: Dict[str, float] | None = None,
         target_col: Optional[str] = 'T (degC)',
     ) -> Tuple['JenaClimateDataset', 'JenaClimateDataset', 'JenaClimateDataset']:
         """
@@ -75,10 +77,7 @@ class JenaClimateDataset(Dataset):
         else:
             target_idx = 0  # default to first column
         data = df.values.astype(np.float32)
-        n = len(data)
-        n_train = int(split_frac.get('train', 0.7) * n)
-        n_val = int(split_frac.get('val', 0.2) * n)
-        n_test = n - n_train - n_val
+        n_train, n_val, n_test = get_split_sizes(len(data), split_frac)
         # Chronological split
         train_data = data[:n_train]
         val_data = data[n_train:n_train+n_val]

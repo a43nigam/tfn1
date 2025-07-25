@@ -1,6 +1,6 @@
 data:
   dataset_name: nlp
-  file_path: data/sample_text_classification.csv  # CSV/TSV with 'text' and 'label' columns
+  file_path: data/dummy/sample_text_classification.csv  # Dummy CSV with 'text' and 'label'
   tokenizer_name: bert-base-uncased
   max_length: 8
   split_frac:

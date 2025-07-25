@@ -1,11 +1,10 @@
 data:
   dataset_name: glue
-  # Kaggle dataset file (the basename is enough; resolver searches /kaggle/input/**)
-  file_path: multinli_train.tsv
+  # Correct SST-2 train split inside repo (tiny subset recommended)
+  file_path: data/SST-2/train.tsv
   tokenizer_name: bert-base-uncased
   max_length: 128
-  # MNLI files use 'premise' column for a single-sentence representation
-  text_col: premise
+  text_col: sentence
   label_col: label
 model:
   vocab_size: 30522

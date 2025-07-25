@@ -1,6 +1,6 @@
 data:
   dataset_name: pg19
-  file_path: data/pg19.csv
+  file_path: data/dummy/pg19.csv
   tokenizer_name: gpt2
   max_length: 512
   text_col: text

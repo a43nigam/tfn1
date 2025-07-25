@@ -1,6 +1,6 @@
 data:
   dataset_name: jena
-  csv_path: data/jena_climate_2009_2016.csv
+  csv_path: data/dummy/jena_climate_2009_2016.csv
   input_len: 96
   output_len: 24
   target_col: "T (degC)"

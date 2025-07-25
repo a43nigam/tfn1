@@ -1,6 +1,6 @@
 data:
   dataset_name: stock
-  csv_path: data/all_stocks_5yr.csv
+  csv_path: data/dummy/all_stocks_5yr.csv
   input_len: 60
   output_len: 5
   target_col: "close"

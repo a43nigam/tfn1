@@ -72,8 +72,15 @@ class SyntheticCopyDataset(Dataset):
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
         # Randomly pick a length *independent* of the index for more variety
         length = torch.randint(1, self.seq_len + 1, (), generator=self.rng).item()
-        # Sample integers from 1 .. vocab_size-1 (reserve 0 for PAD)
-        seq = torch.randint(1, self.vocab_size, (length,), dtype=torch.long, generator=self.rng)
+        # Sample integers uniformly from the vocabulary *excluding* the pad token.
+        if self.vocab_size <= 1:
+            raise ValueError("vocab_size must be at least 2 to reserve a pad token.")
+
+        # Strategy: sample from [0, vocab_size-2] then shift by +1 for indices >= pad_idx
+        raw = torch.randint(0, self.vocab_size - 1, (length,), dtype=torch.long, generator=self.rng)
+        # Shift values greater than or equal to pad_idx so that pad_idx is skipped
+        seq = raw + (raw >= self.pad_idx).long()
+
         item = {"source": seq, "target": seq.clone()}
         if self.task == "classification":
             # Example: use sum of sequence mod num_classes as label
@@ -94,12 +101,8 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
     dataset_name = data_cfg.get("dataset_name", "synthetic")
     if dataset_name == "synthetic":
         model_cfg = config["model"]
-        # Infer task type
-        task = model_cfg.get("task", "copy")
-        # If model_name contains 'classifier', treat as classification
-        model_name = config.get("model_name", "")
-        if "classifier" in model_name:
-            task = "classification"
+        # Explicit task field in YAML takes precedence; fall back to model_cfg for legacy.
+        task = data_cfg.get("task", model_cfg.get("task", "copy"))
         num_classes = model_cfg.get("num_classes", 2)
         return SyntheticCopyDataset(
             dataset_size=data_cfg["dataset_size"],
@@ -185,13 +188,19 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
             raise ValueError(f"Unknown split: {split}")
     elif dataset_name == "pg19":
         import os
-        base_path = data_cfg.get("base_path", "/kaggle/input/the-pg19-language-modeling-benchmark-dataset")
-        split_files = {
-            "train": os.path.join(base_path, "train.csv"),
-            "val": os.path.join(base_path, "validation.csv"),
-            "test": os.path.join(base_path, "test.csv"),
-        }
-        file_path = resolve_data_path(split_files[split])
+        from data import resolve_data_path
+        # If a direct file_path is given, use it for all splits (assume pre-split tiny CSV)
+        direct_path = data_cfg.get("file_path")
+        if direct_path is not None:
+            file_path = resolve_data_path(direct_path)
+        else:
+            base_path = data_cfg.get("base_path", "/kaggle/input/the-pg19-language-modeling-benchmark-dataset")
+            split_files = {
+                "train": os.path.join(base_path, "train.csv"),
+                "val": os.path.join(base_path, "validation.csv"),
+                "test": os.path.join(base_path, "test.csv"),
+            }
+            file_path = resolve_data_path(split_files[split])
         tokenizer_name = data_cfg.get("tokenizer_name", "gpt2")
         max_length = data_cfg.get("max_length", 512)
         text_col = data_cfg.get("text_col", "text")
@@ -240,12 +249,8 @@ def get_dataloader(config: Dict[str, Any], split: str = 'train') -> DataLoader:
     dataset = dataloader_factory(config, split)
     train_cfg = config["training"]
     dataset_name = config["data"].get("dataset_name", "synthetic")
-    # Infer task type for synthetic
-    task = "copy"
-    if dataset_name == "synthetic":
-        model_name = config.get("model_name", "")
-        if "classifier" in model_name:
-            task = "classification"
+    # For synthetic dataset, use its internal task attribute (set by YAML)
+    task = getattr(dataset, "task", "copy")
     # Use drop_last only for the training split so we don't silently discard
     # small validation / test sets (which would lead to 0 batches and hence
     # the "N/A" metrics you observed).

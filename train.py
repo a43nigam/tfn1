@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model.proj_dim", type=int, default=None, help="Projection dimension for Performer models.")
     parser.add_argument("--model.num_filters", type=int, default=None, help="Number of filters for CNN models.")
     parser.add_argument("--model.filter_sizes", type=str, default=None, help="Filter sizes for CNN models (comma-separated, e.g. '3,4,5').")
-    parser.add_argument("--model.bidirectional", type=str, default=None, help="Bidirectional flag for LSTM models (true/false).")
+    parser.add_argument("--model.bidirectional", action="store_true", help="Use bidirectional LSTM (flag).")
     # Additional data flags
     parser.add_argument("--data.input_len", type=int, default=None, help="Input window length for time series.")
     parser.add_argument("--data.output_len", type=int, default=None, help="Output window length for time series.")

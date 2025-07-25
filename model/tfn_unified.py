@@ -96,6 +96,9 @@ class TFN(nn.Module):
         grid_size: int = 100,
         time_steps: int = 3,
         dropout: float = 0.1,
+        # Positional encoding range (if positions None)
+        pos_min: float = 0.1,
+        pos_max: float = 0.9,
         use_enhanced: bool = False,
     ) -> None:
         super().__init__()
@@ -103,7 +106,14 @@ class TFN(nn.Module):
         if task not in ("classification", "regression"):
             raise ValueError(f"Unknown task type: {task}")
         self.task = task
+
+        # Validate positional range --------------------------------------
+        if not (0.0 <= pos_min < pos_max <= 1.0):
+            raise ValueError(f"pos_min and pos_max must satisfy 0<=min<max<=1, got {pos_min}, {pos_max}")
+
         self.embed_dim = embed_dim
+        self.pos_min = pos_min
+        self.pos_max = pos_max
 
         # ------------------------------------------------------------------
         # Input Embedding / Projection
@@ -181,7 +191,7 @@ class TFN(nn.Module):
 
         # Position handling -----------------------------------------------------
         if positions is None:
-            positions = torch.linspace(0.1, 0.9, N, device=inputs.device)
+            positions = torch.linspace(self.pos_min, self.pos_max, N, device=inputs.device)
             positions = positions.unsqueeze(0).unsqueeze(-1).expand(B, -1, -1)
 
         # ------------------------------------------------------------------

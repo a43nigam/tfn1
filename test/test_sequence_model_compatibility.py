@@ -53,6 +53,9 @@ def main():
         print(f"\n=== Testing sequence model: {model_name} ===")
         cmd = [sys.executable, TRAIN_SCRIPT, "--config", CONFIG_PATH, "--model_name", model_name]
         cmd += build_flag_list()
+        # Enhanced TFN requires diffusion evolution and valid head_dim
+        if model_name == "enhanced_tfn_classifier":
+            cmd += ["--model.evolution_type", "diffusion", "--model.embed_dim", "8", "--model.num_heads", "2"]
         print(f"[RUNNING] {' '.join(cmd)}")
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
