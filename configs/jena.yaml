@@ -1,0 +1,19 @@
+data:
+  dataset_name: jena
+  csv_path: data/jena_climate_2009_2016.csv
+  input_len: 336
+  output_len: 96
+  target_col: "T (degC)"
+model:
+  input_dim: 14
+  embed_dim: 128
+  output_dim: 1
+  output_len: 96
+  num_layers: 4
+  dropout: 0.2
+training:
+  batch_size: 64
+  lr: 1e-4
+  epochs: 20
+  grad_clip: 1.0
+  log_interval: 50 

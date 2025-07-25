@@ -1,0 +1,20 @@
+data:
+  dataset_name: stock
+  csv_path: data/all_stocks_5yr.csv
+  input_len: 120
+  output_len: 20
+  target_col: "close"
+  ticker: null
+model:
+  input_dim: 5
+  embed_dim: 128
+  output_dim: 1
+  output_len: 20
+  num_layers: 4
+  dropout: 0.2
+training:
+  batch_size: 64
+  lr: 1e-4
+  epochs: 20
+  grad_clip: 1.0
+  log_interval: 50 

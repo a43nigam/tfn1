@@ -1,0 +1,20 @@
+data:
+  seq_len: 5          # maximum sequence length
+  dataset_size: 100  # number of synthetic examples
+  pad_idx: 0           # padding token index
+
+model:
+  vocab_size: 20       # integer tokens are sampled from 1..vocab_size-1
+  embed_dim: 16       # embedding / TFN hidden dimension
+  grid_size: 64       # TFN spatial grid resolution
+  kernel_type: "rbf"   # projection kernel (rbf | compact | fourier)
+  evolution_type: "cnn" # 'cnn' for base TFN, 'diffusion' only for enhanced TFN
+  time_steps: 1       # evolution steps per TFN layer
+  dropout: 0.1
+
+training:
+  batch_size: 16
+  lr: 1e-3
+  epochs: 1
+  grad_clip: 1.0
+  log_interval: 100 

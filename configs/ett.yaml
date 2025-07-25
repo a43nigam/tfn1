@@ -1,0 +1,18 @@
+data:
+  dataset_name: ett
+  csv_path: /kaggle/input/electricity-transformer-dataset-etdataset/ETT-small/ETTh1.csv
+  input_len: 336
+  output_len: 96
+model:
+  input_dim: 7
+  embed_dim: 256
+  output_dim: 1
+  output_len: 96
+  num_layers: 4
+  dropout: 0.2
+training:
+  batch_size: 64
+  lr: 1e-4
+  epochs: 20
+  grad_clip: 1.0
+  log_interval: 50 

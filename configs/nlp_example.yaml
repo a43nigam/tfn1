@@ -1,0 +1,22 @@
+data:
+  dataset_name: nlp
+  file_path: data/sample_text_classification.csv
+  tokenizer_name: bert-base-uncased
+  max_length: 128
+  split_frac:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+model:
+  input_dim: 1
+  vocab_size: 30522
+  embed_dim: 128
+  n_layers: 4
+  dropout: 0.2
+  num_classes: 2
+training:
+  batch_size: 32
+  lr: 2e-5
+  epochs: 5
+  grad_clip: 1.0
+  log_interval: 20 

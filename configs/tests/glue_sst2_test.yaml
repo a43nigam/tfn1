@@ -1,0 +1,21 @@
+data:
+  dataset_name: glue
+  file_path: data/SST-2/train.tsv
+  tokenizer_name: bert-base-uncased
+  max_length: 128
+  text_col: sentence
+  label_col: label
+
+model:
+  vocab_size: 30522
+  embed_dim: 256
+  num_classes: 2
+  num_layers: 4
+  dropout: 0.1
+
+training:
+  batch_size: 32
+  lr: 1e-3
+  epochs: 2
+  grad_clip: 1.0
+  log_interval: 10 

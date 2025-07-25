@@ -1,0 +1,22 @@
+data:
+  dataset_name: imdb
+  file_path: /kaggle/input/imdb-dataset-of-top-1000-movies-and-tv-shows/imdb_top_1000.csv
+  tokenizer_name: bert-base-uncased
+  max_length: 256
+  text_col: Overview
+  label_col: Genre  # For classification
+  regression_col: IMDB_Rating  # For regression
+
+model:
+  vocab_size: 30522
+  embed_dim: 128
+  num_classes: 20  # Update to actual number of unique genres
+  num_layers: 4
+  dropout: 0.2
+
+training:
+  batch_size: 32
+  lr: 1e-3
+  epochs: 5
+  grad_clip: 1.0
+  log_interval: 10 
