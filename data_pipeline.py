@@ -224,16 +224,25 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
         file_path = data_cfg.get("file_path")
         tokenizer_name = data_cfg.get("tokenizer_name", "bert-base-uncased")
         max_length = data_cfg.get("max_length", 256)
-        text_col = data_cfg.get("text_col", "Overview")
-        label_col = data_cfg.get("label_col", "Genre")
-        regression_col = data_cfg.get("regression_col", "IMDB_Rating")
+        text_col = data_cfg.get("text_col", "review")
+        label_col = data_cfg.get("label_col", "sentiment")
+        regression_col = data_cfg.get("regression_col", "sentiment")
+        split_frac = data_cfg.get("split_frac", {"train": 0.8, "val": 0.1, "test": 0.1})
         # Determine task from model_name or config
         model_name = config.get("model_name", "")
         if "regressor" in model_name or data_cfg.get("task") == "regression":
             task = "regression"
         else:
             task = "classification"
-        return IMDBDataset(file_path, tokenizer_name, max_length, task, text_col, label_col, regression_col)
+        train, val, test = IMDBDataset.get_splits(file_path, tokenizer_name, max_length, split_frac, text_col, label_col, regression_col, task)
+        if split == 'train':
+            return train
+        elif split == 'val':
+            return val
+        elif split == 'test':
+            return test
+        else:
+            raise ValueError(f"Unknown split: {split}")
     else:
         raise ValueError(f"Unknown dataset_name: {dataset_name}")
 

@@ -1,12 +1,13 @@
 model_name: tfn_classifier
 data:
   dataset_name: imdb
-  file_path: /content/drive/MyDrive/training/IMDB/IMDB Dataset.csv
+  file_path: /kaggle/input/training/training/IMDB/IMDB Dataset.csv
   tokenizer_name: bert-base-uncased
   max_length: 256
   text_col: review
   label_col: sentiment  # For classification
   regression_col: sentiment  # For regression
+  split_frac: {"train": 0.8, "val": 0.1, "test": 0.1}  # Proper train/val/test split
 
 model:
   vocab_size: 30522

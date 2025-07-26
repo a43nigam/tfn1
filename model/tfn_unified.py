@@ -162,7 +162,7 @@ class TFN(nn.Module):
                 nn.Linear(embed_dim, embed_dim // 2),
                 nn.ReLU(),
                 nn.Dropout(dropout),
-                nn.Linear(embed_dim // 2, output_len * output_dim),
+                nn.Linear(embed_dim // 2, output_dim),
             )
 
         self._init_weights()
@@ -206,12 +206,29 @@ class TFN(nn.Module):
             # Skip internal positional addition to avoid double-counting
             x = layer(x, positions, add_pos_emb=False)
 
-        # Global average pooling (sequence → vector) ----------------------------
-        pooled = x.mean(dim=1)
-        out = self.head(pooled)
-        if self.task == "regression":
-            out = out.view(out.size(0), self.output_len, self.output_dim)
-        return out if self.task == "regression" else out
+        # Output handling for different tasks
+        if self.task == "classification":
+            # Classification: global average pooling
+            pooled = x.mean(dim=1)  # [B, embed_dim]
+            out = self.head(pooled)  # [B, num_classes]
+        else:  # regression
+            # For regression, use the last few tokens for multi-step forecasting
+            seq_len = x.size(1)
+            if seq_len >= self.output_len:
+                # Use last output_len tokens
+                pooled = x[:, -self.output_len:, :]  # [B, output_len, embed_dim]
+            else:
+                # Pad with the last token if sequence is too short
+                last_token = x[:, -1:, :]  # [B, 1, embed_dim]
+                padding = last_token.repeat(1, self.output_len - seq_len, 1)  # [B, output_len - seq_len, embed_dim]
+                pooled = torch.cat([x, padding], dim=1)  # [B, output_len, embed_dim]
+            
+            # Apply head to each token
+            batch_size, output_len, embed_dim = pooled.shape
+            pooled_flat = pooled.reshape(-1, embed_dim)  # [B * output_len, embed_dim]
+            out_flat = self.head(pooled_flat)  # [B * output_len, output_dim]
+            out = out_flat.reshape(batch_size, output_len, self.output_dim)  # [B, output_len, output_dim]
+        return out
 
     # ------------------------------------------------------------------
     # Helpers
