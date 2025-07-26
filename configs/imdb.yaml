@@ -1,11 +1,11 @@
 data:
   dataset_name: imdb
-  file_path: /kaggle/input/imdb-dataset-of-top-1000-movies-and-tv-shows/imdb_top_1000.csv
+  file_path: /content/drive/MyDrive/training/IMDB/IMDB Dataset.csv
   tokenizer_name: bert-base-uncased
   max_length: 256
-  text_col: Overview
-  label_col: Genre  # For classification
-  regression_col: IMDB_Rating  # For regression
+  text_col: review
+  label_col: sentiment  # For classification
+  regression_col: sentiment  # For regression
 
 model:
   vocab_size: 30522

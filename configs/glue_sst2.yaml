@@ -1,7 +1,7 @@
 data:
   dataset_name: glue
-  # Correct SST-2 train split inside repo (tiny subset recommended)
-  file_path: data/SST-2/train.tsv
+  # SST-2 train split from Google Drive
+  file_path: /content/drive/MyDrive/training/SST-2/train.tsv
   tokenizer_name: bert-base-uncased
   max_length: 128
   text_col: sentence

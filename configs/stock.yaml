@@ -1,9 +1,9 @@
 data:
   dataset_name: stock
-  csv_path: data/all_stocks_5yr.csv
+  csv_path: /content/drive/MyDrive/training/sandp500/sp500_stocks.csv
   input_len: 120
   output_len: 20
-  target_col: "close"
+  target_col: "Close"
   ticker: null
 model:
   input_dim: 5
