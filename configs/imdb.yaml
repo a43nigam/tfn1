@@ -1,3 +1,4 @@
+model_name: tfn_classifier
 data:
   dataset_name: imdb
   file_path: /content/drive/MyDrive/training/IMDB/IMDB Dataset.csv
@@ -10,9 +11,11 @@ data:
 model:
   vocab_size: 30522
   embed_dim: 128
-  num_classes: 20  # Update to actual number of unique genres
+  num_classes: 2  # positive/negative sentiment
   num_layers: 4
   dropout: 0.2
+  kernel_type: rbf
+  evolution_type: cnn
 
 training:
   batch_size: 32

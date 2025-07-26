@@ -1,3 +1,4 @@
+model_name: tfn_regressor
 data:
   dataset_name: stock
   csv_path: /content/drive/MyDrive/training/sandp500/sp500_stocks.csv
@@ -12,6 +13,8 @@ model:
   output_len: 20
   num_layers: 4
   dropout: 0.2
+  kernel_type: rbf
+  evolution_type: cnn
 training:
   batch_size: 64
   lr: 1e-4

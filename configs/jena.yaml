@@ -1,3 +1,4 @@
+model_name: tfn_regressor
 data:
   dataset_name: jena
   csv_path: /content/drive/MyDrive/training/jena_climate_2009_2016.csv
@@ -11,6 +12,8 @@ model:
   output_len: 96
   num_layers: 4
   dropout: 0.2
+  kernel_type: rbf
+  evolution_type: cnn
 training:
   batch_size: 64
   lr: 1e-4
