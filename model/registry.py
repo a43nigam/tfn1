@@ -228,7 +228,7 @@ MODEL_REGISTRY = {
         'task_type': 'regression',
         'evolution_types': [],
         'components': ['transformer_encoder', 'regression_head'],
-        'required_params': ['input_dim', 'embed_dim', 'output_dim'],
+        'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len'],
         'optional_params': ['seq_len', 'num_layers', 'num_heads', 'dropout'],
         'defaults': {
             'seq_len': 512,
@@ -243,7 +243,7 @@ MODEL_REGISTRY = {
         'task_type': 'regression',
         'evolution_types': [],
         'components': ['performer_encoder', 'regression_head'],
-        'required_params': ['input_dim', 'embed_dim', 'output_dim'],
+        'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len'],
         'optional_params': ['seq_len', 'num_layers', 'proj_dim', 'dropout'],
         'defaults': {
             'seq_len': 512,
@@ -258,7 +258,7 @@ MODEL_REGISTRY = {
         'task_type': 'regression',
         'evolution_types': [],
         'components': ['lstm_encoder', 'regression_head'],
-        'required_params': ['input_dim', 'embed_dim', 'output_dim'],
+        'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len'],
         'optional_params': ['hidden_dim', 'num_layers', 'dropout', 'bidirectional'],
         'defaults': {
             'hidden_dim': 128,
@@ -273,7 +273,7 @@ MODEL_REGISTRY = {
         'task_type': 'regression',
         'evolution_types': [],
         'components': ['cnn_encoder', 'regression_head'],
-        'required_params': ['input_dim', 'embed_dim', 'output_dim'],
+        'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len'],
         'optional_params': ['num_filters', 'filter_sizes', 'dropout'],
         'defaults': {
             'num_filters': 128,

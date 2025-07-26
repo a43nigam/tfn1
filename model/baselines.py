@@ -82,16 +82,33 @@ class TransformerBaseline(nn.Module):
                 nn.Linear(embed_dim, embed_dim // 2),
                 nn.ReLU(),
                 nn.Dropout(dropout),
-                nn.Linear(embed_dim // 2, output_len * output_dim)
+                nn.Linear(embed_dim // 2, output_dim)
             )
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: [B, L] (classification) or [B, L, input_dim] (regression)"""
-        h = self.input(x) + self.pos(x.size(1))
+        h = self.input(x) + self.pos(min(x.size(1), self.pos.pos.num_embeddings))
         h = self.transformer(h)
-        pooled = h[:, 0, :]  # [B, embed_dim]
-        out = self.head(pooled)
-        if self.task == "regression":
-            out = out.view(out.size(0), self.output_len, self.output_dim)
+        if self.task == "classification":
+            pooled = h[:, 0, :]  # [B, embed_dim] - use first token for classification
+            out = self.head(pooled)
+        else:
+            # For regression, use the last few tokens for multi-step forecasting
+            # Take the last output_len tokens, or all if sequence is shorter
+            seq_len = h.size(1)
+            if seq_len >= self.output_len:
+                # Use last output_len tokens
+                pooled = h[:, -self.output_len:, :]  # [B, output_len, embed_dim]
+            else:
+                # Pad with the last token if sequence is too short
+                last_token = h[:, -1:, :]  # [B, 1, embed_dim]
+                padding = last_token.repeat(1, self.output_len - seq_len, 1)  # [B, output_len - seq_len, embed_dim]
+                pooled = torch.cat([h, padding], dim=1)  # [B, output_len, embed_dim]
+            
+            # Apply head to each token
+            batch_size, output_len, embed_dim = pooled.shape
+            pooled_flat = pooled.reshape(-1, embed_dim)  # [B * output_len, embed_dim]
+            out_flat = self.head(pooled_flat)  # [B * output_len, output_dim]
+            out = out_flat.reshape(batch_size, output_len, self.output_dim)  # [B, output_len, output_dim]
         return out
 
 
@@ -149,16 +166,30 @@ class PerformerBaseline(nn.Module):
                 nn.Linear(embed_dim, embed_dim // 2),
                 nn.ReLU(),
                 nn.Dropout(dropout),
-                nn.Linear(embed_dim // 2, output_len * output_dim)
+                nn.Linear(embed_dim // 2, output_dim)
             )
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.input(x) + self.pos(x.size(1))
+        h = self.input(x) + self.pos(min(x.size(1), self.pos.pos.num_embeddings))
         for layer in self.layers:
             h = layer(h)
-        pooled = h.mean(dim=1)
-        out = self.head(pooled)
-        if self.task == "regression":
-            out = out.view(out.size(0), self.output_len, self.output_dim)
+        if self.task == "classification":
+            pooled = h.mean(dim=1)  # [B, embed_dim]
+            out = self.head(pooled)
+        else:
+            # For regression, use the last few tokens for multi-step forecasting
+            seq_len = h.size(1)
+            if seq_len >= self.output_len:
+                pooled = h[:, -self.output_len:, :]  # [B, output_len, embed_dim]
+            else:
+                last_token = h[:, -1:, :]  # [B, 1, embed_dim]
+                padding = last_token.repeat(1, self.output_len - seq_len, 1)  # [B, output_len - seq_len, embed_dim]
+                pooled = torch.cat([h, padding], dim=1)  # [B, output_len, embed_dim]
+            
+            # Apply head to each token
+            batch_size, output_len, embed_dim = pooled.shape
+            pooled_flat = pooled.reshape(-1, embed_dim)  # [B * output_len, embed_dim]
+            out_flat = self.head(pooled_flat)  # [B * output_len, output_dim]
+            out = out_flat.reshape(batch_size, output_len, self.output_dim)  # [B, output_len, output_dim]
         return out
 
 
@@ -212,18 +243,32 @@ class LSTMBaseline(nn.Module):
                 nn.Linear(lstm_output_dim, lstm_output_dim // 2),
                 nn.ReLU(),
                 nn.Dropout(dropout),
-                nn.Linear(lstm_output_dim // 2, output_len * output_dim)
+                nn.Linear(lstm_output_dim // 2, output_dim)
             )
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h = self.input(x)
         lstm_out, (hidden, cell) = self.lstm(h)
-        if self.lstm.bidirectional:
-            last_hidden = torch.cat([hidden[-2], hidden[-1]], dim=1)
+        if self.task == "classification":
+            if self.lstm.bidirectional:
+                last_hidden = torch.cat([hidden[-2], hidden[-1]], dim=1)
+            else:
+                last_hidden = hidden[-1]
+            out = self.head(last_hidden)
         else:
-            last_hidden = hidden[-1]
-        out = self.head(last_hidden)
-        if self.task == "regression":
-            out = out.view(out.size(0), self.output_len, self.output_dim)
+            # For regression, use the last few outputs for multi-step forecasting
+            seq_len = lstm_out.size(1)
+            if seq_len >= self.output_len:
+                pooled = lstm_out[:, -self.output_len:, :]  # [B, output_len, hidden_dim]
+            else:
+                last_output = lstm_out[:, -1:, :]  # [B, 1, hidden_dim]
+                padding = last_output.repeat(1, self.output_len - seq_len, 1)  # [B, output_len - seq_len, hidden_dim]
+                pooled = torch.cat([lstm_out, padding], dim=1)  # [B, output_len, hidden_dim]
+            
+            # Apply head to each output
+            batch_size, output_len, hidden_dim = pooled.shape
+            pooled_flat = pooled.reshape(-1, hidden_dim)  # [B * output_len, hidden_dim]
+            out_flat = self.head(pooled_flat)  # [B * output_len, output_dim]
+            out = out_flat.reshape(batch_size, output_len, self.output_dim)  # [B, output_len, output_dim]
         return out
 
 
@@ -272,7 +317,7 @@ class CNNBaseline(nn.Module):
                 nn.Linear(total_filters, total_filters // 2),
                 nn.ReLU(),
                 nn.Dropout(dropout),
-                nn.Linear(total_filters // 2, output_len * output_dim)
+                nn.Linear(total_filters // 2, output_dim)
             )
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h = self.input(x)  # [B, L, embed_dim]
@@ -283,7 +328,17 @@ class CNNBaseline(nn.Module):
             pooled = F.max_pool1d(conv_out, conv_out.size(2))
             conv_outputs.append(pooled.squeeze(2))
         concatenated = torch.cat(conv_outputs, dim=1)
-        out = self.head(concatenated)
-        if self.task == "regression":
-            out = out.view(out.size(0), self.output_len, self.output_dim)
+        
+        if self.task == "classification":
+            out = self.head(concatenated)
+        else:
+            # For regression, we need to generate multiple outputs
+            # Since CNN outputs a single vector, we'll repeat it for multi-step forecasting
+            batch_size = concatenated.size(0)
+            # Repeat the output for each time step
+            repeated = concatenated.unsqueeze(1).repeat(1, self.output_len, 1)  # [B, output_len, features]
+            batch_size, output_len, features = repeated.shape
+            repeated_flat = repeated.reshape(-1, features)  # [B * output_len, features]
+            out_flat = self.head(repeated_flat)  # [B * output_len, output_dim]
+            out = out_flat.reshape(batch_size, output_len, self.output_dim)  # [B, output_len, output_dim]
         return out 
