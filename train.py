@@ -85,6 +85,64 @@ def build_model(model_name: str, model_cfg: dict) -> torch.nn.Module:
     filtered_args = {k: v for k, v in model_args.items() if k in allowed or k == 'task'}
     return model_cls(**filtered_args)
 
+def print_training_info(cfg: Dict[str, Any], model_name: str, model_info: Dict[str, Any], 
+                       model: torch.nn.Module, device: torch.device, train_cfg: Dict[str, Any]) -> None:
+    """Print comprehensive training information including hyperparameters and model details."""
+    
+    print("\n" + "="*80)
+    print("🚀 TRAINING CONFIGURATION")
+    print("="*80)
+    
+    # Dataset info
+    data_cfg = cfg["data"]
+    print(f"\n📊 DATASET:")
+    print(f"   Name: {data_cfg.get('dataset_name', 'unknown')}")
+    print(f"   File: {data_cfg.get('file_path', data_cfg.get('csv_path', 'N/A'))}")
+    if 'input_len' in data_cfg:
+        print(f"   Input Length: {data_cfg['input_len']}")
+    if 'output_len' in data_cfg:
+        print(f"   Output Length: {data_cfg['output_len']}")
+    if 'max_length' in data_cfg:
+        print(f"   Max Length: {data_cfg['max_length']}")
+    
+    # Model info
+    print(f"\n🤖 MODEL:")
+    print(f"   Type: {model_name}")
+    print(f"   Task: {model_info['task_type']}")
+    print(f"   Components: {', '.join(model_info.get('components', []))}")
+    print(f"   Evolution Types: {', '.join(model_info.get('evolution_types', []))}")
+    
+    # Model hyperparameters
+    model_cfg = cfg["model"]
+    print(f"\n⚙️  MODEL HYPERPARAMETERS:")
+    for key, value in model_cfg.items():
+        print(f"   {key}: {value}")
+    
+    # Training hyperparameters
+    print(f"\n🎯 TRAINING HYPERPARAMETERS:")
+    for key, value in train_cfg.items():
+        print(f"   {key}: {value}")
+    
+    # Model architecture details
+    print(f"\n🏗️  MODEL ARCHITECTURE:")
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"   Total Parameters: {total_params:,}")
+    print(f"   Trainable Parameters: {trainable_params:,}")
+    print(f"   Device: {device}")
+    
+    # Print model structure (first few layers)
+    print(f"\n📋 MODEL STRUCTURE (first 3 layers):")
+    for i, (name, module) in enumerate(model.named_modules()):
+        if i >= 3:  # Only show first 3 layers
+            break
+        if len(list(module.children())) == 0:  # Leaf modules only
+            print(f"   {name}: {module}")
+    
+    print("\n" + "="*80)
+    print("🎬 STARTING TRAINING...")
+    print("="*80 + "\n")
+
 # -----------------------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------------------
@@ -125,6 +183,9 @@ def main() -> None:
     model = build_model(model_name, model_cfg).to(device)
     model_info = registry.get_model_config(model_name)
     task_type = model_info['task_type']
+
+    # Print comprehensive training information
+    print_training_info(cfg, model_name, model_info, model, device, train_cfg)
 
     lr_value = train_cfg.get("lr", args.learning_rate)
     if lr_value is None:
