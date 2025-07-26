@@ -57,10 +57,26 @@ def parse_args() -> argparse.Namespace:
 # -----------------------------------------------------------------------------
 
 def update_config_with_args(config: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
+    # Special mappings for CLI arguments that don't follow dot notation
+    special_mappings = {
+        "learning_rate": "training.lr",
+        "batch_size": "training.batch_size", 
+        "epochs": "training.epochs",
+        "weight_decay": "training.weight_decay",
+        "optimizer": "training.optimizer",
+    }
+    
     for arg_key, arg_val in vars(args).items():
         if arg_key == "config" or arg_val is None:
             continue
-        keys = arg_key.split(".")
+            
+        # Handle special mappings
+        if arg_key in special_mappings:
+            config_key = special_mappings[arg_key]
+        else:
+            config_key = arg_key
+            
+        keys = config_key.split(".")
         d = config
         for k in keys[:-1]:
             if k not in d or not isinstance(d[k], dict):
@@ -187,9 +203,7 @@ def main() -> None:
     # Print comprehensive training information
     print_training_info(cfg, model_name, model_info, model, device, train_cfg)
 
-    lr_value = train_cfg.get("lr", args.learning_rate)
-    if lr_value is None:
-        lr_value = 1e-3
+    lr_value = train_cfg.get("lr", 1e-3)
     if isinstance(lr_value, str):
         try:
             lr_value = float(lr_value)
