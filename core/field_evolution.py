@@ -419,8 +419,9 @@ class ModernizedCNNFieldEvolver(nn.Module):
     """
     Modernized CNN-based field evolution.
     
-    Incorporates modern CNN components like depthwise separable convolutions,
+    Incorporates modern CNN components like multi-scale convolutions,
     larger kernel sizes, and gated linear units (GLUs) for better information flow.
+    Note: Uses standard convolutions for simplicity and compatibility.
     """
     
     def __init__(self, embed_dim: int, pos_dim: int, hidden_dim: int = 64,
@@ -604,12 +605,20 @@ class AdaptiveTimeSteppingEvolver(nn.Module):
             adaptive_dt = self.base_dt * (1.0 - 0.8 * dt_scaling)  # [B, 1]
             adaptive_dt = torch.clamp(adaptive_dt, min=self.min_dt, max=self.max_dt)
             
-            # Apply base evolution with adaptive dt
-            evolved_step = self.base_evolver(
-                field_evolved, grid_points, time_steps=1, dt=adaptive_dt.mean().item()
-            )
+            # Apply base evolution with per-batch adaptive dt
+            # We need to handle each batch separately since base evolver expects scalar dt
+            evolved_steps = []
+            for b in range(batch_size):
+                batch_field = field_evolved[b:b+1]  # [1, M, D]
+                batch_grid = grid_points[b:b+1] if grid_points.dim() == 3 else grid_points  # [1, M, P] or [M, P]
+                batch_dt = adaptive_dt[b].item()  # scalar dt for this batch
+                
+                batch_evolved = self.base_evolver(
+                    batch_field, batch_grid, time_steps=1, dt=batch_dt
+                )
+                evolved_steps.append(batch_evolved)
             
-            field_evolved = evolved_step
+            field_evolved = torch.cat(evolved_steps, dim=0)  # [B, M, D]
         
         return field_evolved
 

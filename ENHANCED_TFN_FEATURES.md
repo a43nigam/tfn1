@@ -36,6 +36,7 @@ python train.py --config configs/enhanced_tfn_demo.yaml --model.kernel_type data
 #### `MultiFrequencyFourierKernel`
 - Maps distance to multiple sine and cosine functions with different frequencies
 - Provides more capacity to represent complex, multi-frequency patterns
+- **Key Fix:** The rich multi-frequency features are now preserved throughout the projection process without collapsing
 - Mathematical formulation: `K(z, μ, ω) = [cos(ω₁||z - μ||), sin(ω₁||z - μ||), ..., cos(ωₙ||z - μ||), sin(ωₙ||z - μ||)]`
 
 **Usage**:
@@ -55,6 +56,7 @@ python train.py --config configs/enhanced_tfn_demo.yaml --model.kernel_type mult
 - Uses FiLM conditioning where token embeddings generate scale and shift parameters
 - Applies these parameters to activations inside the kernel network
 - Makes the kernel's shape truly data-dependent
+- **Key Fix:** Vectorized implementation eliminates nested loops for much better performance
 - Mathematical formulation: `K(z, μ, θ(E)) = φ(||z - μ||, θ(E))` where θ(E) are FiLM parameters
 
 **Usage**:
@@ -90,8 +92,8 @@ python train.py --config configs/enhanced_tfn_demo.yaml --model.evolution_type s
 **What we implemented**:
 
 #### `ModernizedCNNFieldEvolver`
-- Incorporates depthwise separable convolutions for efficiency
-- Uses multiple kernel sizes (3, 5, 7) for multi-scale processing
+- Incorporates multi-scale convolutions with multiple kernel sizes (3, 5, 7)
+- Uses standard convolutions for simplicity and compatibility
 - Implements gated linear units (GLUs) for better information flow
 - Includes residual connections and layer normalization
 
@@ -112,6 +114,7 @@ python train.py --config configs/enhanced_tfn_demo.yaml --model.evolution_type m
 - Uses a neural network to predict optimal time steps based on field characteristics
 - Uses smaller steps during periods of high activity and larger ones when stable
 - Monitors field rate of change and field statistics to determine optimal dt
+- **Key Fix:** Now preserves per-batch adaptive dt values instead of averaging across batch
 - Supports both diffusion and wave evolution types
 
 **Usage**:

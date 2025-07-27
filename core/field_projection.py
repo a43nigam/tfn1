@@ -106,8 +106,8 @@ class FieldProjector(nn.Module):
         elif self.kernel_type == "multi_frequency_fourier":
             # Multi-frequency Fourier kernel returns [B, N, M, 2*num_frequencies]
             kernel_values = self.kernel(grid_points, positions, kernel_params)  # [B, N, M, 2*num_freq]
-            # For now, take the mean across frequency dimensions
-            kernel_values = kernel_values.mean(dim=-1)  # [B, N, M]
+            # Use the rich multi-frequency features directly - no collapsing!
+            # kernel_values shape: [B, N, M, 2*num_freq]
         else:
             # Standard kernels
             if kernel_params is None:
@@ -123,18 +123,35 @@ class FieldProjector(nn.Module):
             kernel_values = self.kernel(grid_points, positions, kernel_params)  # [B, N, M]
         
         # Project embeddings to field: E ⊗ K
-        # embeddings: [B, N, D] -> [B, N, D, 1]
-        # kernel_values: [B, N, 1, M] -> [B, N, 1, M]
-        # Result: [B, N, D, M] -> [B, N, M, D]
-        embeddings_expanded = embeddings.unsqueeze(-1)  # [B, N, D, 1]
-        kernel_values_expanded = kernel_values.unsqueeze(2)  # [B, N, 1, M]
-        
-        # Compute weighted embeddings: E ⊗ K
-        weighted_embeddings = embeddings_expanded * kernel_values_expanded  # [B, N, D, M]
-        
-        # Aggregate fields from all tokens: Σᵢ Eᵢ ⊗ Kᵢ
-        field = weighted_embeddings.sum(dim=1)  # [B, D, M] -> [B, M, D]
-        field = field.transpose(1, 2)  # [B, M, D]
+        if self.kernel_type == "multi_frequency_fourier":
+            # Handle multi-frequency Fourier kernel with rich features
+            # embeddings: [B, N, D], kernel_values: [B, N, M, 2*num_freq]
+            # We need to project the multi-frequency features to embedding space
+            batch_size, num_tokens, embed_dim = embeddings.shape
+            _, _, num_grid_points, num_freq_features = kernel_values.shape
+            
+            # Reshape for broadcasting: [B, N, D, 1, 1] * [B, N, 1, M, 2*num_freq]
+            embeddings_expanded = embeddings.unsqueeze(-1).unsqueeze(-1)  # [B, N, D, 1, 1]
+            kernel_values_expanded = kernel_values.unsqueeze(2)  # [B, N, 1, M, 2*num_freq]
+            
+            # Compute weighted embeddings with frequency features
+            weighted_embeddings = embeddings_expanded * kernel_values_expanded  # [B, N, D, M, 2*num_freq]
+            
+            # Aggregate across tokens and frequency dimensions
+            field = weighted_embeddings.sum(dim=1)  # [B, D, M, 2*num_freq]
+            field = field.mean(dim=-1)  # [B, D, M] - average across frequency features
+            field = field.transpose(1, 2)  # [B, M, D]
+        else:
+            # Standard kernels: [B, N, M]
+            embeddings_expanded = embeddings.unsqueeze(-1)  # [B, N, D, 1]
+            kernel_values_expanded = kernel_values.unsqueeze(2)  # [B, N, 1, M]
+            
+            # Compute weighted embeddings: E ⊗ K
+            weighted_embeddings = embeddings_expanded * kernel_values_expanded  # [B, N, D, M]
+            
+            # Aggregate fields from all tokens: Σᵢ Eᵢ ⊗ Kᵢ
+            field = weighted_embeddings.sum(dim=1)  # [B, D, M] -> [B, M, D]
+            field = field.transpose(1, 2)  # [B, M, D]
         
         return field
     

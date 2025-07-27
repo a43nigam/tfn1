@@ -608,40 +608,30 @@ class FiLMLearnableKernel(KernelBasis):
         scale_params = scale_params.reshape(batch_size, num_tokens, self.hidden_dim)  # [B, N, hidden_dim]
         shift_params = shift_params.reshape(batch_size, num_tokens, self.hidden_dim)  # [B, N, hidden_dim]
         
-        # Apply FiLM conditioning to kernel network
-        kernel_values = []
+        # Vectorized FiLM conditioning to kernel network
+        # Reshape distances for vectorized processing: [B, N, M] -> [B*N, M, 1]
+        distances_flat = normalized_distances.reshape(-1, normalized_distances.shape[-1], 1)  # [B*N, M, 1]
         
-        for i in range(batch_size):
-            batch_kernels = []
-            for j in range(num_tokens):
-                # Get distances for this token
-                token_distances = normalized_distances[i, j, :]  # [M]
-                
-                # Apply FiLM conditioning to the kernel network
-                # We need to manually apply FiLM to each layer
-                x = token_distances.unsqueeze(-1)  # [M, 1]
-                
-                # First layer with FiLM
-                x = self.kernel_net[0](x)  # [M, hidden_dim]
-                scale = scale_params[i, j, :].unsqueeze(0)  # [1, hidden_dim]
-                shift = shift_params[i, j, :].unsqueeze(0)  # [1, hidden_dim]
-                x = scale * x + shift  # FiLM conditioning
-                x = self.kernel_net[1](x)  # GELU
-                
-                # Second layer with FiLM
-                x = self.kernel_net[2](x)  # [M, hidden_dim]
-                x = scale * x + shift  # FiLM conditioning
-                x = self.kernel_net[3](x)  # GELU
-                
-                # Final layers
-                x = self.kernel_net[4:](x)  # [M, 1]
-                
-                batch_kernels.append(x.squeeze(-1))  # [M]
-            
-            batch_kernels = torch.stack(batch_kernels, dim=0)  # [N, M]
-            kernel_values.append(batch_kernels)
+        # Apply first layer to all tokens at once
+        x = self.kernel_net[0](distances_flat)  # [B*N, M, hidden_dim]
         
-        kernel_values = torch.stack(kernel_values, dim=0)  # [B, N, M]
+        # Apply FiLM conditioning vectorized
+        scale_expanded = scale_params.reshape(-1, 1, self.hidden_dim)  # [B*N, 1, hidden_dim]
+        shift_expanded = shift_params.reshape(-1, 1, self.hidden_dim)  # [B*N, 1, hidden_dim]
+        x = scale_expanded * x + shift_expanded  # [B*N, M, hidden_dim]
+        x = self.kernel_net[1](x)  # GELU
+        
+        # Apply second layer with FiLM
+        x = self.kernel_net[2](x)  # [B*N, M, hidden_dim]
+        x = scale_expanded * x + shift_expanded  # FiLM conditioning
+        x = self.kernel_net[3](x)  # GELU
+        
+        # Apply final layers
+        for layer in self.kernel_net[4:]:
+            x = layer(x)  # [B*N, M, 1]
+        
+        # Reshape back to [B, N, M]
+        kernel_values = x.squeeze(-1).reshape(batch_size, num_tokens, -1)  # [B, N, M]
         
         return kernel_values
 
