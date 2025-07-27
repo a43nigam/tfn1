@@ -185,14 +185,51 @@ class FLOPSWrapper(nn.Module):
             else:
                 batch_size, seq_len = 1, 1
             
-            # Estimate FLOPS
-            if hasattr(self.model, 'embed_dim'):
-                embed_dim = self.model.embed_dim
-                grid_size = getattr(self.model, 'grid_size', 100)
-                num_layers = getattr(self.model, 'num_layers', 1)
-                kernel_type = getattr(self.model, 'kernel_type', 'rbf')
-                evolution_type = getattr(self.model, 'evolution_type', 'cnn')
+            # Robust parameter extraction with fallbacks
+            def safe_getattr(obj, attr, default):
+                """Safely get attribute with multiple fallback names."""
+                if hasattr(obj, attr):
+                    value = getattr(obj, attr)
+                    # Handle ModuleList objects - get their length
+                    if isinstance(value, nn.ModuleList):
+                        return len(value)
+                    return value
                 
+                # Common alternative attribute names
+                alternatives = {
+                    'embed_dim': ['d_model', 'hidden_dim', 'embedding_dim'],
+                    'grid_size': ['grid_resolution', 'spatial_size'],
+                    'num_layers': ['n_layers', 'layers', 'depth'],
+                    'kernel_type': ['kernel', 'projection_type'],
+                    'evolution_type': ['evolution', 'dynamics_type'],
+                    'num_heads': ['n_heads', 'heads'],
+                    'model_type': ['arch_type', 'architecture']
+                }
+                
+                if attr in alternatives:
+                    for alt in alternatives[attr]:
+                        if hasattr(obj, alt):
+                            value = getattr(obj, alt)
+                            # Handle ModuleList objects - get their length
+                            if isinstance(value, nn.ModuleList):
+                                return len(value)
+                            return value
+                
+                return default
+            
+            # Estimate FLOPS
+            embed_dim = safe_getattr(self.model, 'embed_dim', 128)
+            grid_size = safe_getattr(self.model, 'grid_size', 100)
+            num_layers = safe_getattr(self.model, 'num_layers', 1)
+            kernel_type = safe_getattr(self.model, 'kernel_type', 'rbf')
+            evolution_type = safe_getattr(self.model, 'evolution_type', 'cnn')
+            num_heads = safe_getattr(self.model, 'num_heads', 8)
+            model_type = safe_getattr(self.model, 'model_type', 'transformer')
+            
+            # Determine if this is a TFN model or baseline
+            is_tfn_model = any(hasattr(self.model, attr) for attr in ['embed_dim', 'grid_size', 'kernel_type'])
+            
+            if is_tfn_model:
                 flops_estimate = self.estimator.estimate_tfn_flops(
                     batch_size=batch_size,
                     seq_len=seq_len,
@@ -204,11 +241,6 @@ class FLOPSWrapper(nn.Module):
                 )
             else:
                 # Baseline model estimation
-                embed_dim = getattr(self.model, 'embed_dim', 128)
-                num_layers = getattr(self.model, 'num_layers', 1)
-                num_heads = getattr(self.model, 'num_heads', 8)
-                model_type = getattr(self.model, 'model_type', 'transformer')
-                
                 flops_estimate = self.estimator.estimate_baseline_flops(
                     batch_size=batch_size,
                     seq_len=seq_len,

@@ -1,6 +1,5 @@
 data:
   dataset_name: synthetic
-  task: classification
   seq_len: 5          # maximum sequence length
   dataset_size: 100  # number of synthetic examples
   pad_idx: 0           # padding token index
@@ -15,6 +14,9 @@ model:
   num_heads: 2
   dropout: 0.1
   num_classes: 2
+  input_dim: 8         # input dimension for regression models
+  output_dim: 1        # output dimension for regression models
+  output_len: 1        # output length for regression models
 
 training:
   batch_size: 16

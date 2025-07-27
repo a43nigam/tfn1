@@ -287,7 +287,7 @@ class CNNBaseline(nn.Module):
         output_len: int = 1,
         num_classes: int = 2,
         num_filters: int = 128,
-        filter_sizes: List[int] = [3, 4, 5],
+        filter_sizes: List[int] = [2, 3, 4],  # Smaller default filter sizes
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
@@ -300,6 +300,20 @@ class CNNBaseline(nn.Module):
         else:
             assert input_dim is not None
             self.input = nn.Linear(input_dim, embed_dim)
+        
+        # Adaptive filter sizes based on typical sequence length
+        # Use smaller filters for shorter sequences
+        if hasattr(self, 'seq_len') and self.seq_len < 10:
+            filter_sizes = [2, 3]  # Smaller filters for short sequences
+        elif hasattr(self, 'seq_len') and self.seq_len < 20:
+            filter_sizes = [2, 3, 4]  # Medium filters for medium sequences
+        # Otherwise use the provided filter_sizes
+        
+        # Additional safety check for very short sequences
+        if len(filter_sizes) > 0 and max(filter_sizes) > 4:
+            # If we have very short sequences, use even smaller filters
+            filter_sizes = [2, 3]  # Force small filters for safety
+        
         self.convs = nn.ModuleList([
             nn.Conv1d(embed_dim, num_filters, kernel_size=k)
             for k in filter_sizes

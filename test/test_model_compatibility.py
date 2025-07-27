@@ -2,6 +2,10 @@ import os
 import sys
 import subprocess
 import yaml
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from model import registry
 
 CONFIG_PATH = "configs/tests/synthetic_copy_test.yaml"

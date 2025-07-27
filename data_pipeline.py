@@ -21,13 +21,33 @@ def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: st
     lengths = [item["source"].size(0) for item in batch]
     max_len = max(lengths)
 
-    src = torch.full((batch_size, max_len), pad_idx, dtype=torch.long)
-    tgt = torch.full((batch_size, max_len), pad_idx, dtype=torch.long)
+    # Determine data type and shape based on task and first item
+    first_item = batch[0]["source"]
+    if task == "regression":
+        # For regression, we have feature vectors [seq_len, input_dim]
+        input_dim = first_item.size(1) if first_item.dim() > 1 else 1
+        dtype = torch.float
+        src = torch.full((batch_size, max_len, input_dim), pad_idx, dtype=dtype)
+        tgt = torch.full((batch_size, max_len, input_dim), pad_idx, dtype=dtype)
+    else:
+        # For classification/copy, we have token sequences [seq_len]
+        dtype = torch.long
+        src = torch.full((batch_size, max_len), pad_idx, dtype=dtype)
+        tgt = torch.full((batch_size, max_len), pad_idx, dtype=dtype)
 
     for i, item in enumerate(batch):
         seq_len = item["source"].size(0)
-        src[i, :seq_len] = item["source"]
-        tgt[i, :seq_len] = item["target"]
+        source_data = item["source"].to(dtype)
+        target_data = item["target"].to(dtype)
+        
+        if task == "regression":
+            # For regression, pad feature vectors
+            src[i, :seq_len, :] = source_data
+            tgt[i, :seq_len, :] = target_data
+        else:
+            # For classification/copy, pad token sequences
+            src[i, :seq_len] = source_data
+            tgt[i, :seq_len] = target_data
 
     batch_dict = {"source": src, "target": tgt}
     if task == "classification":
@@ -72,14 +92,22 @@ class SyntheticCopyDataset(Dataset):
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
         # Randomly pick a length *independent* of the index for more variety
         length = torch.randint(1, self.seq_len + 1, (), generator=self.rng).item()
-        # Sample integers uniformly from the vocabulary *excluding* the pad token.
-        if self.vocab_size <= 1:
-            raise ValueError("vocab_size must be at least 2 to reserve a pad token.")
+        
+        if self.task == "regression":
+            # For regression, generate feature vectors instead of token sequences
+            # Generate random features with input_dim dimensions
+            input_dim = 8  # Default input dimension for regression
+            seq = torch.randn(length, input_dim, generator=self.rng)
+        else:
+            # For classification/copy tasks, generate token sequences
+            # Sample integers uniformly from the vocabulary *excluding* the pad token.
+            if self.vocab_size <= 1:
+                raise ValueError("vocab_size must be at least 2 to reserve a pad token.")
 
-        # Strategy: sample from [0, vocab_size-2] then shift by +1 for indices >= pad_idx
-        raw = torch.randint(0, self.vocab_size - 1, (length,), dtype=torch.long, generator=self.rng)
-        # Shift values greater than or equal to pad_idx so that pad_idx is skipped
-        seq = raw + (raw >= self.pad_idx).long()
+            # Strategy: sample from [0, vocab_size-2] then shift by +1 for indices >= pad_idx
+            raw = torch.randint(0, self.vocab_size - 1, (length,), dtype=torch.long, generator=self.rng)
+            # Shift values greater than or equal to pad_idx so that pad_idx is skipped
+            seq = raw + (raw >= self.pad_idx).long()
 
         item = {"source": seq, "target": seq.clone()}
         if self.task == "classification":
@@ -103,6 +131,14 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
         model_cfg = config["model"]
         # Explicit task field in YAML takes precedence; fall back to model_cfg for legacy.
         task = data_cfg.get("task", model_cfg.get("task", "copy"))
+        
+        # Determine task from model name if not explicitly set
+        model_name = config.get("model_name", "")
+        if task == "copy" and "regressor" in model_name:
+            task = "regression"
+        elif task == "copy" and "classifier" in model_name:
+            task = "classification"
+        
         num_classes = model_cfg.get("num_classes", 2)
         return SyntheticCopyDataset(
             dataset_size=data_cfg["dataset_size"],
