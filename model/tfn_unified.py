@@ -130,10 +130,34 @@ class TFN(nn.Module):
         # ------------------------------------------------------------------
         # Core TFN Layers (shared)
         # ------------------------------------------------------------------
+        
+        # Validate that enhanced features are only used when use_enhanced=True
+        if not use_enhanced:
+            enhanced_kernels = ["data_dependent_rbf", "data_dependent_compact", "multi_frequency_fourier", "film_learnable"]
+            enhanced_evolution = ["spatially_varying_pde", "modernized_cnn", "adaptive_time_stepping"]
+            
+            if kernel_type in enhanced_kernels:
+                raise ValueError(f"Enhanced kernel '{kernel_type}' requires use_enhanced=True")
+            if evolution_type in enhanced_evolution:
+                raise ValueError(f"Enhanced evolution '{evolution_type}' requires use_enhanced=True")
+        
         layer_cls = EnhancedTFNLayer if use_enhanced else TrainableTFNLayer
-        self.tfn_layers = nn.ModuleList(
-            [
-                layer_cls(
+        self.tfn_layers = nn.ModuleList()
+        
+        for _ in range(num_layers):
+            if use_enhanced:
+                # EnhancedTFNLayer parameters
+                layer = layer_cls(
+                    embed_dim=embed_dim,
+                    kernel_type=kernel_type,
+                    evolution_type=evolution_type,
+                    grid_size=grid_size,
+                    num_steps=time_steps,
+                    dropout=dropout,
+                )
+            else:
+                # TrainableTFNLayer parameters
+                layer = layer_cls(
                     embed_dim=embed_dim,
                     kernel_type=kernel_type,
                     evolution_type=evolution_type,
@@ -141,9 +165,7 @@ class TFN(nn.Module):
                     time_steps=time_steps,
                     dropout=dropout,
                 )
-                for _ in range(num_layers)
-            ]
-        )
+            self.tfn_layers.append(layer)
 
         # ------------------------------------------------------------------
         # Task Heads

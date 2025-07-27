@@ -51,7 +51,7 @@ MODEL_REGISTRY = {
         'task_type': 'regression',
         'evolution_types': ['cnn', 'pde'],
         'components': ['field_projection', 'field_evolution', 'field_sampling'],
-        'required_params': ['input_dim', 'embed_dim', 'output_dim', 'kernel_type', 'evolution_type'],
+        'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len', 'kernel_type', 'evolution_type'],
         'optional_params': ['num_layers', 'grid_size', 'time_steps', 'dropout'],
         'defaults': {
             'num_layers': 2,

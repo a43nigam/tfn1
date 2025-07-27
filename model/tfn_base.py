@@ -128,7 +128,7 @@ class TrainableEvolution(nn.Module):
             for conv in self.conv_layers:
                 nn.init.normal_(conv.weight, 0, 0.1)
 
-        elif evolution_type == "pde":
+        elif evolution_type in ["pde", "diffusion"]:
             # Learnable diffusion coefficient
             self.alpha = nn.Parameter(torch.tensor(0.1))
             self.dt = nn.Parameter(torch.tensor(0.01))
@@ -137,7 +137,7 @@ class TrainableEvolution(nn.Module):
         """Evolve field with trainable parameters."""
         if self.evolution_type == "cnn":
             return self._cnn_evolution(field)
-        elif self.evolution_type == "pde":
+        elif self.evolution_type in ["pde", "diffusion"]:
             return self._pde_evolution(field, grid_points)
         else:
             raise ValueError(f"Unknown evolution type: {self.evolution_type}")

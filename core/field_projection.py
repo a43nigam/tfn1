@@ -8,7 +8,9 @@ discrete token embeddings into continuous fields using kernel-based emission.
 import torch
 import torch.nn as nn
 from typing import Tuple, Optional, Union
-from .kernels import KernelBasis, RBFKernel, CompactKernel, FourierKernel, LearnableKernel
+from .kernels import (KernelBasis, RBFKernel, CompactKernel, FourierKernel, LearnableKernel,
+                     DataDependentRBFKernel, DataDependentCompactKernel, 
+                     MultiFrequencyFourierKernel, FiLMLearnableKernel)
 
 
 class FieldProjector(nn.Module):
@@ -61,6 +63,14 @@ class FieldProjector(nn.Module):
             self.kernel = FourierKernel(pos_dim=pos_dim, **default_kernel_params)
         elif kernel_type == "learnable":
             self.kernel = LearnableKernel(pos_dim=pos_dim, **default_kernel_params)
+        elif kernel_type == "data_dependent_rbf":
+            self.kernel = DataDependentRBFKernel(pos_dim=pos_dim, embed_dim=embed_dim, **default_kernel_params)
+        elif kernel_type == "data_dependent_compact":
+            self.kernel = DataDependentCompactKernel(pos_dim=pos_dim, embed_dim=embed_dim, **default_kernel_params)
+        elif kernel_type == "multi_frequency_fourier":
+            self.kernel = MultiFrequencyFourierKernel(pos_dim=pos_dim, **default_kernel_params)
+        elif kernel_type == "film_learnable":
+            self.kernel = FiLMLearnableKernel(pos_dim=pos_dim, embed_dim=embed_dim, **default_kernel_params)
         else:
             # Default to RBF kernel for unknown types
             self.kernel = RBFKernel(pos_dim=pos_dim, **default_kernel_params)
@@ -90,18 +100,27 @@ class FieldProjector(nn.Module):
             grid_points = grid_points.unsqueeze(0).expand(batch_size, -1, -1)  # [M, P] -> [B, M, P]
         
         # Compute kernel values for all token-grid pairs
-        # kernel_values: [B, N, M]
-        if kernel_params is None:
-            # Use default parameters (e.g., sigma=0.2 for RBF)
-            if self.kernel_type == "rbf":
-                kernel_params = torch.full((batch_size, num_tokens, 1), 0.2, 
-                                        device=embeddings.device, dtype=embeddings.dtype)
-            else:
-                # Default parameters for other kernels
-                kernel_params = torch.full((batch_size, num_tokens, 1), 0.2,
-                                        device=embeddings.device, dtype=embeddings.dtype)
-        
-        kernel_values = self.kernel(grid_points, positions, kernel_params)  # [B, N, M]
+        # Handle data-dependent kernels that require embeddings
+        if self.kernel_type in ["data_dependent_rbf", "data_dependent_compact", "film_learnable"]:
+            kernel_values = self.kernel(grid_points, positions, embeddings)  # [B, N, M]
+        elif self.kernel_type == "multi_frequency_fourier":
+            # Multi-frequency Fourier kernel returns [B, N, M, 2*num_frequencies]
+            kernel_values = self.kernel(grid_points, positions, kernel_params)  # [B, N, M, 2*num_freq]
+            # For now, take the mean across frequency dimensions
+            kernel_values = kernel_values.mean(dim=-1)  # [B, N, M]
+        else:
+            # Standard kernels
+            if kernel_params is None:
+                # Use default parameters (e.g., sigma=0.2 for RBF)
+                if self.kernel_type == "rbf":
+                    kernel_params = torch.full((batch_size, num_tokens, 1), 0.2, 
+                                            device=embeddings.device, dtype=embeddings.dtype)
+                else:
+                    # Default parameters for other kernels
+                    kernel_params = torch.full((batch_size, num_tokens, 1), 0.2,
+                                            device=embeddings.device, dtype=embeddings.dtype)
+            
+            kernel_values = self.kernel(grid_points, positions, kernel_params)  # [B, N, M]
         
         # Project embeddings to field: E ⊗ K
         # embeddings: [B, N, D] -> [B, N, D, 1]

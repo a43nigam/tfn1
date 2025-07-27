@@ -182,15 +182,17 @@ class Trial:
     
     def should_stop(self, epoch: int, val_loss: float) -> bool:
         """Check if training should stop early."""
-        if epoch < self.min_epochs:
-            return False
-        
+        # Always track the best loss, regardless of min_epochs
         if val_loss < self.best_val_loss:
             self.best_val_loss = val_loss
             self.best_epoch = epoch
             self.patience_counter = 0
         else:
             self.patience_counter += 1
+        
+        # Only allow early stopping after min_epochs
+        if epoch < self.min_epochs:
+            return False
         
         if self.patience_counter >= self.patience:
             self.early_stopped = True
@@ -531,6 +533,8 @@ def main():
                        help="Minimum epochs before early stopping")
     parser.add_argument("--epochs", type=int, default=20,
                        help="Maximum training epochs")
+    parser.add_argument("--weight_decay", type=float, default=0.0,
+                       help="Weight decay for optimizer")
     parser.add_argument("--seed", type=int, default=42,
                        help="Random seed")
     
@@ -550,6 +554,7 @@ def main():
     
     # Update config with CLI args
     config['epochs'] = args.epochs
+    config['weight_decay'] = args.weight_decay
     
     # Parse parameter sweep
     param_sweep = parse_param_sweep(args.param_sweep)

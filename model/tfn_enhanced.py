@@ -69,10 +69,14 @@ class EnhancedTFNLayer(nn.Module):
         # Output projection
         self.output_proj = nn.Linear(embed_dim, embed_dim)
         self.dropout = nn.Dropout(dropout)
+        
+        # Position embeddings (for compatibility with Unified TFN)
+        self.pos_embeddings = nn.Linear(pos_dim, embed_dim)
     def forward(self, 
                 embeddings: torch.Tensor,      # [B, N, D] token embeddings
                 positions: torch.Tensor,       # [B, N, P] token positions
-                grid_points: Optional[torch.Tensor] = None) -> torch.Tensor:
+                grid_points: Optional[torch.Tensor] = None,
+                add_pos_emb: bool = True) -> torch.Tensor:
         batch_size, num_tokens, embed_dim = embeddings.shape
         if grid_points is None:
             grid_points = self._generate_grid_points(batch_size)

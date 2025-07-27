@@ -40,6 +40,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model.num_filters", type=int, default=None, help="Number of filters for CNN models.")
     parser.add_argument("--model.filter_sizes", type=str, default=None, help="Filter sizes for CNN models (comma-separated, e.g. '3,4,5').")
     parser.add_argument("--model.bidirectional", action="store_true", help="Use bidirectional LSTM (flag).")
+    # Enhanced TFN flags
+    parser.add_argument("--model.kernel_type", type=str, default=None, help="Kernel type for TFN (rbf, compact, fourier, learnable, data_dependent_rbf, data_dependent_compact, multi_frequency_fourier, film_learnable).")
+    parser.add_argument("--model.evolution_type", type=str, default=None, help="Evolution type for TFN (cnn, pde, diffusion, wave, schrodinger, spatially_varying_pde, modernized_cnn, adaptive_time_stepping).")
+    parser.add_argument("--model.use_data_dependent_kernels", action="store_true", help="Enable data-dependent kernel parameters.")
+    parser.add_argument("--model.use_spatially_varying_pde", action="store_true", help="Enable spatially-varying PDE coefficients.")
+    parser.add_argument("--model.use_adaptive_time_stepping", action="store_true", help="Enable adaptive time stepping.")
+    parser.add_argument("--model.time_steps", type=int, default=None, help="Number of time steps for field evolution.")
+    parser.add_argument("--model.grid_size", type=int, default=None, help="Grid size for field projection.")
+    parser.add_argument("--model.num_layers", type=int, default=None, help="Number of TFN layers.")
+    parser.add_argument("--model.use_enhanced", action="store_true", help="Enable enhanced TFN features (data-dependent kernels, advanced evolution, etc.).")
+    parser.add_argument("--model.use_modernized_cnn", action="store_true", help="Use modernized CNN evolution with depthwise separable convolutions.")
+    parser.add_argument("--model.kernel_hidden_dim", type=int, default=None, help="Hidden dimension for data-dependent kernel predictors.")
+    parser.add_argument("--model.evolution_hidden_dim", type=int, default=None, help="Hidden dimension for evolution coefficient predictors.")
+    parser.add_argument("--model.num_frequencies", type=int, default=None, help="Number of frequencies for multi-frequency Fourier kernel.")
+    parser.add_argument("--model.min_dt", type=float, default=None, help="Minimum time step for adaptive time stepping.")
+    parser.add_argument("--model.max_dt", type=float, default=None, help="Maximum time step for adaptive time stepping.")
     # Additional data flags
     parser.add_argument("--data.input_len", type=int, default=None, help="Input window length for time series.")
     parser.add_argument("--data.output_len", type=int, default=None, help="Output window length for time series.")
@@ -89,12 +105,19 @@ def update_config_with_args(config: Dict[str, Any], args: argparse.Namespace) ->
 # Model instantiation logic
 # -----------------------------------------------------------------------------
 
-def build_model(model_name: str, model_cfg: dict) -> torch.nn.Module:
+def build_model(model_name: str, model_cfg: dict, data_cfg: dict = None) -> torch.nn.Module:
     model_info = registry.get_model_config(model_name)
     model_cls = model_info['class']
     task_type = model_info['task_type']
     model_args = dict(model_info.get('defaults', {}))
     model_args.update(model_cfg)
+    
+    # Add data config parameters that might be needed by the model
+    if data_cfg is not None:
+        # Pass output_len from data config to model if needed
+        if 'output_len' in data_cfg and 'output_len' in model_info.get('required_params', []):
+            model_args['output_len'] = data_cfg['output_len']
+    
     if 'task' in model_cls.__init__.__code__.co_varnames:
         model_args['task'] = task_type
     allowed = set(model_info.get('required_params', []) + model_info.get('optional_params', []))
@@ -196,7 +219,7 @@ def main() -> None:
         train_ds, val_ds, test_ds = PG19Dataset.get_splits(file_path, tokenizer_name, max_length, split_frac, text_col)
         print(f"PG19 splits: train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}")
 
-    model = build_model(model_name, model_cfg).to(device)
+    model = build_model(model_name, model_cfg, data_cfg).to(device)
     model_info = registry.get_model_config(model_name)
     task_type = model_info['task_type']
 
