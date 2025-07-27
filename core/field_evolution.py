@@ -29,7 +29,7 @@ class FieldEvolver(nn.Module):
             embed_dim: Dimension of field embeddings
             pos_dim: Dimension of spatial coordinates
             evolution_type: Type of evolution ("cnn", "pde", "spatially_varying_pde", 
-                         "modernized_cnn", "adaptive_time_stepping")
+                         "modernized_cnn")
         """
         super().__init__()
         self.embed_dim = embed_dim
@@ -51,8 +51,6 @@ class FieldEvolver(nn.Module):
             self.evolver = PDEFieldEvolver(embed_dim, pos_dim, pde_type=pde_type)
         elif evolution_type == "spatially_varying_pde":
             self.evolver = SpatiallyVaryingPDEFieldEvolver(embed_dim, pos_dim)
-        elif evolution_type == "adaptive_time_stepping":
-            self.evolver = AdaptiveTimeSteppingEvolver(embed_dim, pos_dim)
         else:
             raise ValueError(f"Unknown evolution type: {evolution_type}")
     

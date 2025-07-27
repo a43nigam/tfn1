@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 from typing import Optional, Dict, Any
 from src import metrics
+from src.flops_tracker import create_flops_tracker, log_flops_stats
 import math
 
 class Trainer:
@@ -25,6 +26,7 @@ class Trainer:
         grad_clip: Optional[float] = 1.0,
         log_interval: int = 100,
         warmup_epochs: int = 1,
+        track_flops: bool = False,
     ) -> None:
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -35,7 +37,15 @@ class Trainer:
         self.epochs = epochs
         self.grad_clip = grad_clip
         self.log_interval = log_interval
-        self.history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": [], "train_mse": [], "val_mse": [], "train_mae": [], "val_mae": []}
+        self.track_flops = track_flops
+        self.history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": [], "train_mse": [], "val_mse": [], "train_mae": [], "val_mae": [], "learning_rates": []}
+
+        # Create FLOPS tracker if enabled
+        if self.track_flops:
+            self.flops_tracker = create_flops_tracker(self.model)
+            self.model = self.flops_tracker
+        else:
+            self.flops_tracker = None
 
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
         self.scheduler = self._build_scheduler(lr, warmup_epochs)
@@ -97,11 +107,20 @@ class Trainer:
         model_name = getattr(self.model, 'name', self.model.__class__.__name__)
         num_params = sum(p.numel() for p in self.model.parameters())
         print(f"Model: {model_name} | Total parameters: {num_params:,}")
+        
+        # Track learning rates for each epoch
+        learning_rates = []
+        
         for epoch in range(1, self.epochs + 1):
             train_loss, train_acc, train_mse, train_mae = self._run_epoch(self.train_loader, train=True)
             val_loss, val_acc, val_mse, val_mae = (None, None, None, None)
             if self.val_loader is not None:
                 val_loss, val_acc, val_mse, val_mae = self._run_epoch(self.val_loader, train=False)
+            
+            # Get current learning rate
+            current_lr = self.optimizer.param_groups[0]['lr']
+            learning_rates.append(current_lr)
+            
             self.history["train_loss"].append(train_loss)
             self.history["val_loss"].append(val_loss)
             self.history["train_acc"].append(train_acc)
@@ -110,11 +129,28 @@ class Trainer:
             self.history["val_mse"].append(val_mse)
             self.history["train_mae"].append(train_mae)
             self.history["val_mae"].append(val_mae)
+            self.history["learning_rates"].append(current_lr)
+            
             print(f"Epoch {epoch:02d} | Train Loss: {self._fmt(train_loss)} | Val Loss: {self._fmt(val_loss)} | "
                   f"Train Acc: {self._fmt(train_acc)} | Val Acc: {self._fmt(val_acc)} | "
                   f"Train MSE: {self._fmt(train_mse)} | Val MSE: {self._fmt(val_mse)} | "
                   f"Train MAE: {self._fmt(train_mae)} | Val MAE: {self._fmt(val_mae)} | "
-                  f"LR: {self.optimizer.param_groups[0]['lr']:.6f}")
+                  f"LR: {current_lr:.6f}")
+            
+            # Step the scheduler
+            if hasattr(self, 'scheduler'):
+                self.scheduler.step()
+        
+        # Log FLOPS stats at the end if tracking is enabled
+        flops_stats = None
+        if self.track_flops and self.flops_tracker:
+            flops_stats = self.flops_tracker.get_flops_stats()
+            print("\n" + "="*50)
+            print("FLOPS STATISTICS")
+            print("="*50)
+            log_flops_stats(flops_stats, prefix="  ")
+            self.history["flops_stats"] = flops_stats
+        
         return self.history
 
     def _run_epoch(self, loader: DataLoader, train: bool):
@@ -140,7 +176,14 @@ class Trainer:
                     mse_val = mae_val = None
                 elif self.task in ("regression", "time_series"):
                     preds = self.model(x)
-                    loss = self.criterion(preds, y)
+                    # Handle multi-dimensional targets for time series
+                    if y.dim() > 1:
+                        # Flatten targets for loss calculation
+                        y_flat = y.view(y.size(0), -1)
+                        preds_flat = preds.view(preds.size(0), -1)
+                        loss = self.criterion(preds_flat, y_flat)
+                    else:
+                        loss = self.criterion(preds, y)
                     acc = None
                     mse_val = metrics.mse(preds, y)
                     mae_val = metrics.mae(preds, y)

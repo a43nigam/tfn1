@@ -133,8 +133,8 @@ class TFN(nn.Module):
         
         # Validate that enhanced features are only used when use_enhanced=True
         if not use_enhanced:
-            enhanced_kernels = ["data_dependent_rbf", "data_dependent_compact", "multi_frequency_fourier", "film_learnable"]
-            enhanced_evolution = ["spatially_varying_pde", "modernized_cnn", "adaptive_time_stepping"]
+            enhanced_kernels = ["data_dependent_rbf", "data_dependent_compact", "film_learnable"]
+            enhanced_evolution = ["spatially_varying_pde", "modernized_cnn"]
             
             if kernel_type in enhanced_kernels:
                 raise ValueError(f"Enhanced kernel '{kernel_type}' requires use_enhanced=True")

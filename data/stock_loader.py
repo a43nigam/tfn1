@@ -68,17 +68,36 @@ class StockMarketDataset(Dataset):
         # Optionally filter by ticker symbol
         if ticker is not None and 'Name' in df.columns:
             df = df[df['Name'] == ticker]
-        # Use only numeric columns (open, high, low, close, volume)
-        cols = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in df.columns]
+        # Use only numeric columns (open, high, low, close, volume) - case insensitive
+        available_cols = [c.lower() for c in df.columns]
+        target_col_lower = target_col.lower() if isinstance(target_col, str) else target_col
+        
+        # Find matching columns case-insensitively
+        cols = []
+        for col_name in ['open', 'high', 'low', 'close', 'volume']:
+            if col_name in available_cols:
+                # Find the original column name with correct case
+                original_col = [c for c in df.columns if c.lower() == col_name][0]
+                cols.append(original_col)
+        
         df = df[cols]
+        
         # Determine target column index
         if target_col is not None:
             if isinstance(target_col, str):
-                target_idx = df.columns.get_loc(target_col)
+                # Find target column case-insensitively
+                target_col_original = [c for c in df.columns if c.lower() == target_col_lower]
+                if not target_col_original:
+                    raise ValueError(f"Target column '{target_col}' not found in available columns: {list(df.columns)}")
+                target_idx = df.columns.get_loc(target_col_original[0])
             else:
                 target_idx = int(target_col)
         else:
-            target_idx = 3  # default to 'close'
+            # Default to 'close' column
+            close_cols = [c for c in df.columns if c.lower() == 'close']
+            if not close_cols:
+                raise ValueError("No 'close' column found in available columns")
+            target_idx = df.columns.get_loc(close_cols[0])
         data = df.values.astype(np.float32)
         n_train, n_val, n_test = get_split_sizes(len(data), split_frac)
         # Chronological split

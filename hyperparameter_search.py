@@ -46,11 +46,18 @@ class TrialResult:
     best_epoch: int
     best_val_loss: float
     best_val_accuracy: float
+    best_val_mse: float
+    best_val_mae: float
     final_train_loss: float
     final_train_accuracy: float
+    final_train_mse: float
+    final_train_mae: float
     final_val_loss: float
     final_val_accuracy: float
+    final_val_mse: float
+    final_val_mae: float
     training_history: List[Dict[str, Any]]
+    flops_stats: Optional[Dict[str, Any]] = None
 
 
 class SearchSpace:
@@ -179,6 +186,7 @@ class Trial:
         
         # Training history
         self.training_history = []
+        self.flops_stats = None
     
     def should_stop(self, epoch: int, val_loss: float) -> bool:
         """Check if training should stop early."""
@@ -202,15 +210,21 @@ class Trial:
         return False
     
     def log_epoch(self, epoch: int, train_loss: float, train_acc: float, 
-                  val_loss: float, val_acc: float) -> None:
+                  train_mse: float, train_mae: float, val_loss: float, val_acc: float,
+                  val_mse: float, val_mae: float, learning_rate: float = None) -> None:
         """Log metrics for current epoch."""
         epoch_data = {
             "epoch": epoch,
             "timestamp": datetime.now().isoformat(),
             "train_loss": train_loss,
             "train_accuracy": train_acc,
+            "train_mse": train_mse,
+            "train_mae": train_mae,
             "val_loss": val_loss,
-            "val_accuracy": val_acc
+            "val_accuracy": val_acc,
+            "val_mse": val_mse,
+            "val_mae": val_mae,
+            "learning_rate": learning_rate
         }
         self.training_history.append(epoch_data)
     
@@ -221,6 +235,14 @@ class Trial:
         
         # Get final metrics from last epoch
         final_metrics = self.training_history[-1] if self.training_history else {}
+        
+        # Get best epoch metrics (best_epoch is 1-indexed, but list is 0-indexed)
+        best_metrics = {}
+        if self.best_epoch > 0 and self.best_epoch <= len(self.training_history):
+            best_metrics = self.training_history[self.best_epoch - 1]
+        elif self.training_history:
+            # Fallback to first epoch if best_epoch is invalid
+            best_metrics = self.training_history[0]
         
         return TrialResult(
             trial_id=self.trial_id,
@@ -234,12 +256,19 @@ class Trial:
             early_stop_reason=self.early_stop_reason,
             best_epoch=self.best_epoch,
             best_val_loss=self.best_val_loss,
-            best_val_accuracy=self.training_history[self.best_epoch-1]["val_accuracy"] if self.best_epoch > 0 else 0.0,
+            best_val_accuracy=best_metrics.get("val_accuracy", 0.0),
+            best_val_mse=best_metrics.get("val_mse", 0.0),
+            best_val_mae=best_metrics.get("val_mae", 0.0),
             final_train_loss=final_metrics.get("train_loss", 0.0),
             final_train_accuracy=final_metrics.get("train_accuracy", 0.0),
+            final_train_mse=final_metrics.get("train_mse", 0.0),
+            final_train_mae=final_metrics.get("train_mae", 0.0),
             final_val_loss=final_metrics.get("val_loss", 0.0),
             final_val_accuracy=final_metrics.get("val_accuracy", 0.0),
-            training_history=self.training_history
+            final_val_mse=final_metrics.get("val_mse", 0.0),
+            final_val_mae=final_metrics.get("val_mae", 0.0),
+            training_history=self.training_history,
+            flops_stats=self.flops_stats
         )
 
 
@@ -399,7 +428,8 @@ class HyperparameterSearch:
             epochs=trial_config.get('epochs', 10),
             grad_clip=trial_config.get('grad_clip', 1.0),
             log_interval=trial_config.get('log_interval', 100),
-            warmup_epochs=trial_config.get('warmup_epochs', 1)
+            warmup_epochs=trial_config.get('warmup_epochs', 2),
+            track_flops=True  # Enable FLOPs tracking for hyperparameter search
         )
         
         # Custom training loop with early stopping
@@ -419,26 +449,55 @@ class HyperparameterSearch:
             # Extract metrics
             train_loss = train_metrics[0]  # avg_loss
             train_acc = train_metrics[1] if train_metrics[1] is not None else 0.0  # avg_acc
+            train_mse = train_metrics[2] if train_metrics[2] is not None else 0.0  # avg_mse
+            train_mae = train_metrics[3] if train_metrics[3] is not None else 0.0  # avg_mae
             val_loss = val_metrics[0]  # avg_loss
             val_acc = val_metrics[1] if val_metrics[1] is not None else 0.0  # avg_acc
+            val_mse = val_metrics[2] if val_metrics[2] is not None else 0.0  # avg_mse
+            val_mae = val_metrics[3] if val_metrics[3] is not None else 0.0  # avg_mae
             
-            # Print epoch progress
-            print(f"    Epoch {epoch:2d}: train_loss={train_loss:.4f}, train_acc={train_acc:.4f}, "
-                  f"val_loss={val_loss:.4f}, val_acc={val_acc:.4f}", flush=True)
+            # Determine task type for appropriate metric printing
+            task = trial_config.get('task', 'classification')
+            
+            if task in ('regression', 'time_series'):
+                # Print regression metrics (MSE, MAE)
+                print(f"    Epoch {epoch:2d}: train_loss={train_loss:.4f}, train_mse={train_mse:.4f}, train_mae={train_mae:.4f}, "
+                      f"val_loss={val_loss:.4f}, val_mse={val_mse:.4f}, val_mae={val_mae:.4f}", flush=True)
+            else:
+                # Print classification metrics (accuracy)
+                print(f"    Epoch {epoch:2d}: train_loss={train_loss:.4f}, train_acc={train_acc:.4f}, "
+                      f"val_loss={val_loss:.4f}, val_acc={val_acc:.4f}", flush=True)
             
             # Log epoch
             trial.log_epoch(
                 epoch=epoch,
                 train_loss=train_loss,
                 train_acc=train_acc,
+                train_mse=train_mse,
+                train_mae=train_mae,
                 val_loss=val_loss,
-                val_acc=val_acc
+                val_acc=val_acc,
+                val_mse=val_mse,
+                val_mae=val_mae,
+                learning_rate=trainer.optimizer.param_groups[0]['lr']
             )
             
             # Check early stopping
             if trial.should_stop(epoch, val_loss):
                 print(f"    Early stopping at epoch {epoch}")
                 break
+        
+        # Get FLOPS stats if tracking was enabled
+        flops_stats = None
+        if hasattr(trainer, 'flops_tracker') and trainer.flops_tracker:
+            flops_stats = trainer.flops_tracker.get_flops_stats()
+            print(f"    FLOPS Stats:")
+            print(f"      Total FLOPS: {flops_stats['total_flops']:,}")
+            print(f"      Avg FLOPS per pass: {flops_stats['avg_flops_per_pass']:,.0f}")
+            print(f"      FLOPS per second: {flops_stats['flops_per_second']:,.0f}")
+        
+        # Update trial with FLOPS stats
+        trial.flops_stats = flops_stats
         
         return trial.get_result()
     
@@ -537,6 +596,8 @@ def main():
                        help="Weight decay for optimizer")
     parser.add_argument("--seed", type=int, default=42,
                        help="Random seed")
+    parser.add_argument("--track_flops", action="store_true",
+                       help="Enable FLOPS tracking during training")
     
     args = parser.parse_args()
     
@@ -555,6 +616,7 @@ def main():
     # Update config with CLI args
     config['epochs'] = args.epochs
     config['weight_decay'] = args.weight_decay
+    config['track_flops'] = args.track_flops
     
     # Parse parameter sweep
     param_sweep = parse_param_sweep(args.param_sweep)

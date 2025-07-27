@@ -125,8 +125,6 @@ class EnhancedTFNModel(nn.Module):
                  kernel_type: str = "rbf",
                  evolution_type: str = "diffusion",
                  interference_type: str = "standard",
-                 propagator_type: str = "standard",
-                 operator_type: str = "standard",
                  grid_size: int = 100,
                  num_heads: int = 8,
                  dropout: float = 0.1,
@@ -145,8 +143,6 @@ class EnhancedTFNModel(nn.Module):
             kernel_type: Type of kernel for field projection
             evolution_type: Type of evolution for field evolution
             interference_type: Type of interference
-            propagator_type: Type of propagator
-            operator_type: Type of interaction operator
             grid_size: Number of grid points
             num_heads: Number of attention heads
             dropout: Dropout rate

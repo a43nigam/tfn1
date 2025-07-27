@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=None, help="Number of training epochs.")
     parser.add_argument("--weight_decay", type=float, default=None, help="L2 regularization strength.")
     parser.add_argument("--optimizer", type=str, default=None, help="Optimizer to use (adamw, sgd, etc.)")
+    parser.add_argument("--warmup_epochs", type=int, default=None, help="Number of warmup epochs for learning rate scheduling.")
     parser.add_argument("--model.d_model", type=int, default=None, help="Main hidden dimension of the model.")
     parser.add_argument("--model.n_layers", type=int, default=None, help="Number of model layers.")
     parser.add_argument("--model.n_heads", type=int, default=None, help="Number of attention heads.")
@@ -80,6 +81,7 @@ def update_config_with_args(config: Dict[str, Any], args: argparse.Namespace) ->
         "epochs": "training.epochs",
         "weight_decay": "training.weight_decay",
         "optimizer": "training.optimizer",
+        "warmup_epochs": "training.warmup_epochs",
     }
     
     for arg_key, arg_val in vars(args).items():
@@ -244,6 +246,8 @@ def main() -> None:
         epochs=train_cfg.get("epochs", args.epochs or 10),
         grad_clip=float(train_cfg.get("grad_clip", 1.0)),
         log_interval=train_cfg.get("log_interval", 100),
+        warmup_epochs=train_cfg.get("warmup_epochs", 1),
+        track_flops=True  # Enable FLOPs tracking
     )
 
     trainer.fit()

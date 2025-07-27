@@ -1,0 +1,24 @@
+model_name: tfn_regressor
+task: time_series
+data:
+  dataset_name: stock
+  csv_path: data/dummy/all_stocks_5yr.csv  # Use dummy data for testing
+  input_len: 60  # Reduced from 120
+  output_len: 10  # Reduced from 20
+  target_col: "close"
+  ticker: null
+model:
+  input_dim: 5
+  embed_dim: 64  # Reduced from 128
+  output_dim: 1
+  output_len: 10  # Reduced from 20
+  num_layers: 2  # Reduced from 4
+  dropout: 0.2
+  kernel_type: rbf
+  evolution_type: cnn
+training:
+  batch_size: 16  # Reduced from 64 for CPU
+  lr: 1e-4
+  epochs: 5  # Reduced from 20 for faster testing
+  grad_clip: 1.0
+  log_interval: 10  # More frequent logging 

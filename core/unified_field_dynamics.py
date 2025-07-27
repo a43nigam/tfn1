@@ -108,9 +108,6 @@ class UnifiedFieldDynamics(nn.Module):
         elif evolution_type == "modernized_cnn":
             # For modernized CNN, we'll use a simple operator that delegates to CNN
             return DiffusionOperator(embed_dim)  # Placeholder
-        elif evolution_type == "adaptive_time_stepping":
-            # For adaptive time stepping, we'll use the standard diffusion operator
-            return DiffusionOperator(embed_dim)
         else:
             raise ValueError(f"Unknown evolution type: {evolution_type}")
     

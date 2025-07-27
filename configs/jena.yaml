@@ -1,7 +1,8 @@
 model_name: tfn_regressor
+task: time_series
 data:
   dataset_name: jena
-  csv_path: /content/drive/MyDrive/training/jena_climate_2009_2016.csv
+  csv_path: /kaggle/input/training/training/jena_climate_2009_2016.csv
   input_len: 336
   output_len: 96
   target_col: "T (degC)"
