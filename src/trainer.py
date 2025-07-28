@@ -227,14 +227,20 @@ class Trainer:
                     mse_val = metrics.mse(preds_flat, y_flat)
                     mae_val = metrics.mae(preds_flat, y_flat)
                     
-                    # Denormalize predictions and targets for metric calculation if scaler exists and not training
-                    if self.scaler is not None and not train:
+                    # Denormalize predictions and targets for metric calculation if scaler exists
+                    # Apply denormalization consistently for both training and validation
+                    if self.scaler is not None:
                         # Get the target column index from the dataset
                         target_col_idx = getattr(loader.dataset, 'target_col', 0)
                         
                         # Get the mean and std for the target column ONLY
                         mean = self.scaler.mean_[target_col_idx]
                         std = self.scaler.scale_[target_col_idx]
+                        
+                        # Debug: Print denormalization info for first batch
+                        if batch_idx == 1:
+                            print(f"🔍 Denormalization: mean={mean:.4f}, std={std:.4f}")
+                            print(f"   Before denorm - MSE: {metrics.mse(preds_flat, y_flat):.6f}")
                         
                         # Denormalize predictions and targets
                         # Formula: original = normalized * std + mean
@@ -244,6 +250,10 @@ class Trainer:
                         # Calculate metrics on the original scale
                         mse_val = metrics.mse(preds_denorm, y_denorm)
                         mae_val = metrics.mae(preds_denorm, y_denorm)
+                        
+                        # Debug: Print after denormalization
+                        if batch_idx == 1:
+                            print(f"   After denorm - MSE: {mse_val:.6f}")
                 elif self.task == "language_modeling":
                     # For LM, x may be a tuple (input_ids, attention_mask)
                     if isinstance(x, tuple):
