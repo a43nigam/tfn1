@@ -10,6 +10,7 @@ from data.stock_loader import StockMarketDataset
 from data.glue_loader import GLUEDataset
 from data.arxiv_loader import ArxivDataset
 from data.pg19_loader import PG19Dataset
+from data.wikitext_loader import WikiTextDataset
 
 def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: str = "copy") -> Dict[str, torch.Tensor]:
     """Custom ``collate_fn`` that pads variable-length sequences.
@@ -241,6 +242,15 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
         max_length = data_cfg.get("max_length", 512)
         text_col = data_cfg.get("text_col", "text")
         return PG19Dataset(file_path, tokenizer_name, max_length, text_col=text_col)
+    elif dataset_name == "wikitext":
+        wikitext_dataset_name = data_cfg.get("wikitext_dataset_name", "wikitext-2-raw-v1")
+        tokenizer_name = data_cfg.get("tokenizer_name", "gpt2")
+        max_length = data_cfg.get("max_length", 512)
+        text_col = data_cfg.get("text_col", "text")
+        max_samples = data_cfg.get("max_samples", None)
+        use_streaming = data_cfg.get("use_streaming", False)
+        split_map = {"train": "train", "val": "validation", "test": "test"}
+        return WikiTextDataset(wikitext_dataset_name, tokenizer_name, max_length, split=split_map[split], text_col=text_col, use_streaming=use_streaming, max_samples=max_samples)
     elif dataset_name == "nlp":
         file_path = data_cfg.get("file_path")
         tokenizer_name = data_cfg.get("tokenizer_name", "bert-base-uncased")

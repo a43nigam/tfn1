@@ -151,6 +151,7 @@ MODEL_REGISTRY = {
             'num_heads': 8,
             'dropout': 0.1,
             'max_seq_len': 512,
+
             'use_physics_constraints': False,
             'constraint_weight': 0.1
         }
@@ -329,7 +330,7 @@ TASK_COMPATIBILITY = {
     'language_modeling': {
         'models': ['tfn_language_model', 'enhanced_tfn_language_model', 'transformer_language_model', 
                   'performer_language_model'],
-        'datasets': ['pg19', 'long_text']
+        'datasets': ['pg19', 'wikitext', 'long_text']
     },
     'vision': {
         'models': ['tfn_vision'],
