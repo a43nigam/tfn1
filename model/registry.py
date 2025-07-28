@@ -35,14 +35,15 @@ MODEL_REGISTRY = {
         'evolution_types': ['cnn', 'pde'],
         'components': ['field_projection', 'field_evolution', 'field_sampling'],
         'required_params': ['vocab_size', 'embed_dim', 'num_classes', 'kernel_type', 'evolution_type'],
-        'optional_params': ['num_layers', 'grid_size', 'time_steps', 'dropout'],
+        'optional_params': ['num_layers', 'grid_size', 'time_steps', 'dropout', 'use_enhanced'],
         'defaults': {
             'num_layers': 2,
             'kernel_type': 'rbf',
             'evolution_type': 'cnn',
             'grid_size': 100,
             'time_steps': 3,
-            'dropout': 0.1
+            'dropout': 0.1,
+            'use_enhanced': False
         }
     },
     
@@ -52,14 +53,15 @@ MODEL_REGISTRY = {
         'evolution_types': ['cnn', 'pde'],
         'components': ['field_projection', 'field_evolution', 'field_sampling'],
         'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len', 'kernel_type', 'evolution_type'],
-        'optional_params': ['num_layers', 'grid_size', 'time_steps', 'dropout'],
+        'optional_params': ['num_layers', 'grid_size', 'time_steps', 'dropout', 'use_enhanced'],
         'defaults': {
             'num_layers': 2,
             'kernel_type': 'rbf',
             'evolution_type': 'cnn',
             'grid_size': 100,
             'time_steps': 3,
-            'dropout': 0.1
+            'dropout': 0.1,
+            'use_enhanced': False
         }
     },
     
