@@ -40,6 +40,9 @@ class Trainer:
         self.track_flops = track_flops
         self.history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": [], "train_mse": [], "val_mse": [], "train_mae": [], "val_mae": [], "learning_rates": []}
 
+        # Get the scaler from the training dataset for denormalization during evaluation
+        self.scaler = getattr(train_loader.dataset, 'scaler', None)
+
         # Create FLOPS tracker if enabled
         if self.track_flops:
             self.flops_tracker = create_flops_tracker(self.model)
@@ -176,17 +179,71 @@ class Trainer:
                     mse_val = mae_val = None
                 elif self.task in ("regression", "time_series"):
                     preds = self.model(x)
-                    # Handle multi-dimensional targets for time series
-                    if y.dim() > 1:
-                        # Flatten targets for loss calculation
-                        y_flat = y.view(y.size(0), -1)
-                        preds_flat = preds.view(preds.size(0), -1)
-                        loss = self.criterion(preds_flat, y_flat)
-                    else:
-                        loss = self.criterion(preds, y)
+                    
+                    # Debug: Print shapes for first batch only
+                    if batch_idx == 1 and train:
+                        print(f"🔍 Debug - Model output shape: {preds.shape}, Target shape: {y.shape}")
+                    
+                    # Handle shape mismatches between model output and targets
+                    # Model output: [B, output_len, output_dim]
+                    # Target shape: [B, seq_len, input_dim] or [B, seq_len]
+                    
+                    # Ensure consistent shapes for loss and metric calculation
+                    if y.dim() == 3:
+                        # Target is [B, seq_len, input_dim]
+                        if preds.shape[1] != y.shape[1] or preds.shape[2] != y.shape[2]:
+                            # Debug: Print shape mismatch
+                            if batch_idx == 1 and train:
+                                print(f"⚠️  Shape mismatch detected: preds {preds.shape} vs target {y.shape}")
+                            
+                            # Reshape predictions to match target shape
+                            if preds.shape[1] > y.shape[1]:
+                                # Truncate predictions to match target length
+                                preds = preds[:, :y.shape[1], :]
+                            elif preds.shape[1] < y.shape[1]:
+                                # Pad predictions to match target length
+                                padding = preds[:, -1:, :].repeat(1, y.shape[1] - preds.shape[1], 1)
+                                preds = torch.cat([preds, padding], dim=1)
+                            
+                            # Handle output dimension mismatch
+                            if preds.shape[2] != y.shape[2]:
+                                if preds.shape[2] > y.shape[2]:
+                                    preds = preds[:, :, :y.shape[2]]
+                                else:
+                                    padding = torch.zeros(preds.shape[0], preds.shape[1], y.shape[2] - preds.shape[2], device=preds.device)
+                                    preds = torch.cat([preds, padding], dim=2)
+                            
+                            # Debug: Print final shapes
+                            if batch_idx == 1 and train:
+                                print(f"✅ After reshaping: preds {preds.shape}, target {y.shape}")
+                    
+                    # Flatten for loss calculation (consistent approach)
+                    y_flat = y.view(y.size(0), -1)
+                    preds_flat = preds.view(preds.size(0), -1)
+                    loss = self.criterion(preds_flat, y_flat)
                     acc = None
-                    mse_val = metrics.mse(preds, y)
-                    mae_val = metrics.mae(preds, y)
+                    
+                    # Calculate metrics using the same flattened tensors for consistency
+                    mse_val = metrics.mse(preds_flat, y_flat)
+                    mae_val = metrics.mae(preds_flat, y_flat)
+                    
+                    # Denormalize predictions and targets for metric calculation if scaler exists and not training
+                    if self.scaler is not None and not train:
+                        # Get the target column index from the dataset
+                        target_col_idx = getattr(loader.dataset, 'target_col', 0)
+                        
+                        # Get the mean and std for the target column ONLY
+                        mean = self.scaler.mean_[target_col_idx]
+                        std = self.scaler.scale_[target_col_idx]
+                        
+                        # Denormalize predictions and targets
+                        # Formula: original = normalized * std + mean
+                        preds_denorm = preds_flat * std + mean
+                        y_denorm = y_flat * std + mean
+                        
+                        # Calculate metrics on the original scale
+                        mse_val = metrics.mse(preds_denorm, y_denorm)
+                        mae_val = metrics.mae(preds_denorm, y_denorm)
                 elif self.task == "language_modeling":
                     # For LM, x may be a tuple (input_ids, attention_mask)
                     if isinstance(x, tuple):
