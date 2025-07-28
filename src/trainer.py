@@ -180,10 +180,6 @@ class Trainer:
                 elif self.task in ("regression", "time_series"):
                     preds = self.model(x)
                     
-                    # Debug: Print shapes for first batch only
-                    if batch_idx == 1 and train:
-                        print(f"🔍 Debug - Model output shape: {preds.shape}, Target shape: {y.shape}")
-                    
                     # Handle shape mismatches between model output and targets
                     # Model output: [B, output_len, output_dim]
                     # Target shape: [B, seq_len, input_dim] or [B, seq_len]
@@ -192,10 +188,6 @@ class Trainer:
                     if y.dim() == 3:
                         # Target is [B, seq_len, input_dim]
                         if preds.shape[1] != y.shape[1] or preds.shape[2] != y.shape[2]:
-                            # Debug: Print shape mismatch
-                            if batch_idx == 1 and train:
-                                print(f"⚠️  Shape mismatch detected: preds {preds.shape} vs target {y.shape}")
-                            
                             # Reshape predictions to match target shape
                             if preds.shape[1] > y.shape[1]:
                                 # Truncate predictions to match target length
@@ -212,10 +204,6 @@ class Trainer:
                                 else:
                                     padding = torch.zeros(preds.shape[0], preds.shape[1], y.shape[2] - preds.shape[2], device=preds.device)
                                     preds = torch.cat([preds, padding], dim=2)
-                            
-                            # Debug: Print final shapes
-                            if batch_idx == 1 and train:
-                                print(f"✅ After reshaping: preds {preds.shape}, target {y.shape}")
                     
                     # Flatten for loss calculation (consistent approach)
                     y_flat = y.view(y.size(0), -1)
@@ -237,11 +225,6 @@ class Trainer:
                         mean = self.scaler.mean_[target_col_idx]
                         std = self.scaler.scale_[target_col_idx]
                         
-                        # Debug: Print denormalization info for first batch
-                        if batch_idx == 1:
-                            print(f"🔍 Denormalization: mean={mean:.4f}, std={std:.4f}")
-                            print(f"   Before denorm - MSE: {metrics.mse(preds_flat, y_flat):.6f}")
-                        
                         # Denormalize predictions and targets
                         # Formula: original = normalized * std + mean
                         preds_denorm = preds_flat * std + mean
@@ -250,10 +233,6 @@ class Trainer:
                         # Calculate metrics on the original scale
                         mse_val = metrics.mse(preds_denorm, y_denorm)
                         mae_val = metrics.mae(preds_denorm, y_denorm)
-                        
-                        # Debug: Print after denormalization
-                        if batch_idx == 1:
-                            print(f"   After denorm - MSE: {mse_val:.6f}")
                 elif self.task == "language_modeling":
                     # For LM, x may be a tuple (input_ids, attention_mask)
                     if isinstance(x, tuple):
