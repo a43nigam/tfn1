@@ -592,6 +592,8 @@ def main():
                        help="Minimum epochs before early stopping")
     parser.add_argument("--epochs", type=int, default=20,
                        help="Maximum training epochs")
+    parser.add_argument("--warmup_epochs", type=int, default=None,
+                       help="Number of warmup epochs for learning rate scheduling")
     parser.add_argument("--weight_decay", type=float, default=0.0,
                        help="Weight decay for optimizer")
     parser.add_argument("--seed", type=int, default=42,
@@ -615,6 +617,8 @@ def main():
     
     # Update config with CLI args
     config['epochs'] = args.epochs
+    if args.warmup_epochs is not None:
+        config['warmup_epochs'] = args.warmup_epochs
     config['weight_decay'] = args.weight_decay
     config['track_flops'] = args.track_flops
     
