@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", type=str, default=None, help="Directory to save logs and checkpoints.")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
     parser.add_argument("--disable_logging", action="store_true", help="Disable logging to external services.")
+    parser.add_argument("--device", type=str, default=None, help="Device to use (cuda, cpu, auto). Default: auto-detect.")
     parser.add_argument("--learning_rate", type=float, default=None, help="Learning rate for optimizer.")
     parser.add_argument("--batch_size", type=int, default=None, help="Batch size for training.")
     parser.add_argument("--epochs", type=int, default=None, help="Number of training epochs.")
@@ -214,7 +215,27 @@ def main() -> None:
     with open(args.config, "r") as f:
         cfg = yaml.safe_load(f)
     cfg = update_config_with_args(cfg, args)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Device detection with --device flag support
+    if args.device is not None:
+        if args.device == "auto":
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            device = torch.device(args.device)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    print(f"🔧 Using device: {device}")
+    if device.type == "cuda" and torch.cuda.is_available():
+        try:
+            print(f"   GPU: {torch.cuda.get_device_name()}")
+            print(f"   Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+        except Exception as e:
+            print(f"   GPU info unavailable: {e}")
+    elif device.type == "cuda" and not torch.cuda.is_available():
+        print("   ⚠️  CUDA requested but not available - falling back to CPU")
+        device = torch.device("cpu")
+        print(f"   Using CPU instead")
 
     model_name = cfg.get("model_name") or args.model_name or "tfn_classifier"
     # Universal: Print split sizes for all datasets

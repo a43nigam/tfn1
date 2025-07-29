@@ -438,7 +438,7 @@ class HyperparameterSearch:
             val_loader=val_loader,
             test_loader=test_loader,
             task=trial_config.get('task', 'classification'),
-            device=trial_config.get('device', 'cpu'),
+            device=trial_config.get('training', {}).get('device', 'cpu'),
             lr=trial_config.get('learning_rate', 1e-3),
             weight_decay=trial_config.get('weight_decay', 0.0),
             epochs=trial_config.get('epochs', 10),
@@ -648,6 +648,8 @@ def main():
                        help="Parameter sweep specification")
     parser.add_argument("--output_dir", type=str, default=None,
                        help="Output directory for results")
+    parser.add_argument("--device", type=str, default=None,
+                       help="Device to use (cuda, cpu, auto). Default: auto-detect.")
     parser.add_argument("--patience", type=int, default=5,
                        help="Early stopping patience")
     parser.add_argument("--min_epochs", type=int, default=3,
@@ -679,6 +681,33 @@ def main():
     
     # Update config with CLI args
     config = update_config_with_args(config, args)
+    
+    # Device detection with --device flag support
+    if args.device is not None:
+        if args.device == "auto":
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            device = args.device
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Set device in config
+    if "training" not in config:
+        config["training"] = {}
+    config["training"]["device"] = device
+    
+    print(f"🔧 Using device: {device}")
+    if device == "cuda" and torch.cuda.is_available():
+        try:
+            print(f"   GPU: {torch.cuda.get_device_name()}")
+            print(f"   Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+        except Exception as e:
+            print(f"   GPU info unavailable: {e}")
+    elif device == "cuda" and not torch.cuda.is_available():
+        print("   ⚠️  CUDA requested but not available - falling back to CPU")
+        device = "cpu"
+        config["training"]["device"] = device
+        print(f"   Using CPU instead")
     
     # Parse parameter sweep
     param_sweep = parse_param_sweep(args.param_sweep)
