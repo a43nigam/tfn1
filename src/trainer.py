@@ -101,6 +101,20 @@ class Trainer:
         correct = (preds == targets).float().sum().item()
         total = targets.numel()
         return correct / total
+    
+    def _language_modeling_accuracy(self, logits, targets):
+        # For language modeling - next token prediction accuracy
+        # Ignore padding tokens (targets == -100)
+        valid_mask = targets != -100
+        if valid_mask.sum() == 0:
+            return 0.0
+        
+        preds = torch.argmax(logits, dim=-1)
+        correct = (preds == targets).float()
+        # Only count valid tokens (not padding)
+        correct = correct[valid_mask].sum().item()
+        total = valid_mask.sum().item()
+        return correct / total if total > 0 else 0.0
 
     def _fmt(self, val):
         return f"{val:.4f}" if val is not None else "N/A"
@@ -240,10 +254,10 @@ class Trainer:
                     else:
                         logits = self.model(x)
                     # logits: [B, L, vocab_size], y: [B, L]
-                    logits = logits.view(-1, logits.size(-1))
-                    y = y.view(-1)
-                    loss = self.criterion(logits, y)
-                    acc = None
+                    logits_flat = logits.view(-1, logits.size(-1))
+                    y_flat = y.view(-1)
+                    loss = self.criterion(logits_flat, y_flat)
+                    acc = self._language_modeling_accuracy(logits_flat, y_flat)
                     mse_val = mae_val = None
                 else:
                     raise ValueError(f"Unknown task: {self.task}")

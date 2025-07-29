@@ -67,6 +67,7 @@ class WikiTextDataset(Dataset):
             return_tensors='pt',
         )
         input_ids = enc['input_ids'].squeeze(0)
+        attention_mask = enc['attention_mask'].squeeze(0)
         # For LM: labels are input_ids shifted by 1 (next token prediction)
         labels = input_ids.clone()
         labels[:-1] = input_ids[1:]
@@ -78,7 +79,7 @@ class WikiTextDataset(Dataset):
         
         return {
             'input_ids': input_ids,
-            'attention_mask': enc['attention_mask'].squeeze(0),
+            'attention_mask': attention_mask,
             'labels': labels,
         }
     
