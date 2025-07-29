@@ -44,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     # Enhanced TFN flags
     parser.add_argument("--model.kernel_type", type=str, default=None, help="Kernel type for TFN (rbf, compact, fourier, learnable, data_dependent_rbf, data_dependent_compact, multi_frequency_fourier, film_learnable).")
     parser.add_argument("--model.evolution_type", type=str, default=None, help="Evolution type for TFN (cnn, pde, diffusion, wave, schrodinger, spatially_varying_pde, modernized_cnn, adaptive_time_stepping).")
+    parser.add_argument("--model.interference_type", type=str, default=None, help="Interference type for TFN (standard, causal, multiscale, physics).")
     parser.add_argument("--model.use_data_dependent_kernels", action="store_true", help="Enable data-dependent kernel parameters.")
     parser.add_argument("--model.use_spatially_varying_pde", action="store_true", help="Enable spatially-varying PDE coefficients.")
     parser.add_argument("--model.use_adaptive_time_stepping", action="store_true", help="Enable adaptive time stepping.")

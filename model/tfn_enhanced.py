@@ -286,4 +286,180 @@ def create_enhanced_tfn_model(vocab_size: int,
         num_layers=num_layers,
         interference_type=interference_type,
         **kwargs
-    ) 
+    )
+
+
+class EnhancedTFNRegressor(nn.Module):
+    """
+    Enhanced TFN Model for Regression Tasks.
+    
+    A regression-compatible version of the enhanced TFN that accepts
+    continuous input features instead of discrete tokens.
+    """
+    
+    def __init__(self, 
+                 input_dim: int,
+                 embed_dim: int,
+                 output_dim: int,
+                 output_len: int,
+                 num_layers: int,
+                 pos_dim: int = 1,
+                 kernel_type: str = "rbf",
+                 evolution_type: str = "diffusion",
+                 interference_type: str = "standard",
+                 grid_size: int = 100,
+                 num_heads: int = 8,
+                 dropout: float = 0.1,
+                 *,
+                 use_physics_constraints: bool = False,
+                 constraint_weight: float = 0.1,
+                 max_seq_len: int = 512):
+        """
+        Initialize enhanced TFN regressor.
+        
+        Args:
+            input_dim: Input feature dimension
+            embed_dim: Dimension of embeddings
+            output_dim: Output feature dimension
+            output_len: Output sequence length
+            num_layers: Number of TFN layers
+            pos_dim: Dimension of position space
+            kernel_type: Type of kernel for field projection
+            evolution_type: Type of evolution for field evolution
+            interference_type: Type of interference
+            grid_size: Number of grid points
+            num_heads: Number of attention heads
+            dropout: Dropout rate
+            max_seq_len: Maximum sequence length
+        """
+        super().__init__()
+        self.input_dim = input_dim
+        self.embed_dim = embed_dim
+        self.output_dim = output_dim
+        self.output_len = output_len
+        self.num_layers = num_layers
+        self.max_seq_len = max_seq_len
+        
+        # Input projection (for continuous features)
+        self.input_proj = nn.Linear(input_dim, embed_dim)
+        
+        # Position embedding
+        self.pos_embedding = nn.Embedding(max_seq_len, embed_dim)
+        
+        # Enhanced TFN layers
+        self.layers = nn.ModuleList([
+            EnhancedTFNLayer(
+                embed_dim=embed_dim,
+                pos_dim=pos_dim,
+                kernel_type=kernel_type,
+                evolution_type=evolution_type,
+                interference_type=interference_type,
+                grid_size=grid_size,
+                num_steps=4,  # Default for UnifiedFieldDynamics
+                dt=0.01,  # Default for UnifiedFieldDynamics
+                dropout=dropout,
+                use_physics_constraints=use_physics_constraints,
+                constraint_weight=constraint_weight
+            )
+            for _ in range(num_layers)
+        ])
+        
+        # Output projection for regression
+        self.output_proj = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(embed_dim // 2, output_dim)
+        )
+        
+        # Layer normalization
+        self.final_norm = nn.LayerNorm(embed_dim)
+        
+        # Initialize weights
+        self._init_weights()
+        
+    def _init_weights(self):
+        """Initialize model weights."""
+        # Input projection initialization
+        nn.init.normal_(self.input_proj.weight, 0, 0.02)
+        nn.init.zeros_(self.input_proj.bias)
+        
+        # Position embedding initialization
+        nn.init.normal_(self.pos_embedding.weight, 0, 0.02)
+        
+        # Output projection initialization
+        for layer in self.output_proj:
+            if isinstance(layer, nn.Linear):
+                nn.init.normal_(layer.weight, 0, 0.02)
+                nn.init.zeros_(layer.bias)
+        
+    def forward(self, 
+                inputs: torch.Tensor,  # [B, N, input_dim] continuous features
+                positions: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Forward pass through enhanced TFN regressor.
+        
+        Args:
+            inputs: Input continuous features [B, N, input_dim]
+            positions: Token positions [B, N, P] (optional)
+            
+        Returns:
+            Regression outputs [B, output_len, output_dim]
+        """
+        batch_size, seq_len, input_dim = inputs.shape
+        
+        # Input projection
+        embeddings = self.input_proj(inputs)  # [B, N, embed_dim]
+        
+        # Generate position coordinates for TFN layers
+        if positions is None:
+            # Use normalized sequential positions
+            positions = torch.arange(seq_len, device=inputs.device, dtype=torch.float32)
+            positions = positions / (seq_len - 1)  # Normalize to [0, 1]
+            positions = positions.unsqueeze(0).expand(batch_size, -1)  # [B, N]
+            positions = positions.unsqueeze(-1)  # [B, N, 1]
+        
+        # Position embeddings for residual connection
+        pos_indices = torch.arange(seq_len, device=inputs.device).unsqueeze(0)
+        pos_embeddings = self.pos_embedding(pos_indices)  # [1, N, embed_dim]
+        pos_embeddings = pos_embeddings.expand(batch_size, -1, -1)  # [B, N, embed_dim]
+        
+        # Combine input and position embeddings
+        x = embeddings + pos_embeddings
+        
+        # Pass through enhanced TFN layers
+        for layer in self.layers:
+            x = layer(x, positions)
+        
+        # Final normalization
+        x = self.final_norm(x)
+        
+        # Output projection for regression
+        # Take the last output_len tokens for prediction
+        if seq_len >= self.output_len:
+            x = x[:, -self.output_len:, :]  # [B, output_len, embed_dim]
+        else:
+            # Pad if sequence is shorter than output_len
+            padding = torch.zeros(batch_size, self.output_len - seq_len, self.embed_dim, 
+                                device=x.device, dtype=x.dtype)
+            x = torch.cat([x, padding], dim=1)  # [B, output_len, embed_dim]
+        
+        outputs = self.output_proj(x)  # [B, output_len, output_dim]
+        
+        return outputs
+    
+    def get_physics_constraints(self) -> Dict[str, torch.Tensor]:
+        """
+        Get physics constraint losses from all layers.
+        
+        Returns:
+            Dictionary of constraint losses
+        """
+        constraints = {}
+        
+        for i, layer in enumerate(self.layers):
+            layer_constraints = layer.get_physics_constraints()
+            for key, value in layer_constraints.items():
+                constraints[f"layer_{i}_{key}"] = value
+        
+        return constraints 

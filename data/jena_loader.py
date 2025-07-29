@@ -91,6 +91,12 @@ class JenaClimateDataset(Dataset):
         train_ds = JenaClimateDataset(train_data, input_len, output_len, target_col=target_idx)
         val_ds = JenaClimateDataset(val_data, input_len, output_len, target_col=target_idx)
         test_ds = JenaClimateDataset(test_data, input_len, output_len, target_col=target_idx)
+        
+        # Attach the scaler to all datasets for denormalization during evaluation
+        train_ds.scaler = scaler
+        val_ds.scaler = scaler
+        test_ds.scaler = scaler
+        
         return train_ds, val_ds, test_ds
 
 if __name__ == '__main__':

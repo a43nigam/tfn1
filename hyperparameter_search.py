@@ -410,10 +410,20 @@ class HyperparameterSearch:
         # Build model
         model = self._build_model(model_name, trial_config)
         
-        # Print model parameter count
+        # Print model parameter count and debug info
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"    Model: {model_name} | Total parameters: {total_params:,} | Trainable: {trainable_params:,}")
+        print(f"    Model class: {type(model).__name__}")
+        print(f"    Model module: {model.__class__.__module__}")
+        
+        # Print first few layers for debugging
+        print(f"    Model layers:")
+        for i, (name, module) in enumerate(model.named_modules()):
+            if i < 5:  # Show first 5 layers
+                print(f"      {name}: {type(module).__name__}")
+            else:
+                break
         
         # Create trainer
         trainer = Trainer(
@@ -502,44 +512,33 @@ class HyperparameterSearch:
         return trial.get_result()
     
     def _build_model(self, model_name: str, config: Dict[str, Any]) -> torch.nn.Module:
-        """Build model from registry."""
+        """Build model from registry using the same logic as train.py."""
         model_info = registry.get_model_config(model_name)
         model_cls = model_info['class']
+        task_type = model_info['task_type']
+        model_args = dict(model_info.get('defaults', {}))
         
-        # Get model parameters from config - check both root level and model section
-        model_params = {}
-        for param in model_info.get('required_params', []):
-            # Check in model section first, then root level
-            if param in config.get('model', {}):
-                model_params[param] = config['model'][param]
-            elif param in config:
-                model_params[param] = config[param]
-            else:
-                raise ValueError(f"Required parameter '{param}' not found in config")
+        # Get model config from the config dictionary
+        model_cfg = config.get('model', {})
+        model_args.update(model_cfg)
         
-        # Add optional parameters
-        for param in model_info.get('optional_params', []):
-            if param in config.get('model', {}):
-                model_params[param] = config['model'][param]
-            elif param in config:
-                model_params[param] = config[param]
+        # Add data config parameters that might be needed by the model
+        data_cfg = config.get('data')
+        if data_cfg is not None:
+            # Pass output_len from data config to model if needed
+            if 'output_len' in data_cfg and 'output_len' in model_info.get('required_params', []):
+                model_args['output_len'] = data_cfg['output_len']
         
-        # Add defaults
-        model_params.update(model_info.get('defaults', {}))
+        if 'task' in model_cls.__init__.__code__.co_varnames:
+            model_args['task'] = task_type
+        allowed = set(model_info.get('required_params', []) + model_info.get('optional_params', []))
+        filtered_args = {k: v for k, v in model_args.items() if k in allowed or k == 'task'}
         
-        # Handle special cases for different model types
-        if model_name == 'tfn_classifier':
-            # TFN classifier needs task parameter
-            return model_cls.for_classification(**model_params)
-        elif model_name == 'tfn_regressor':
-            # TFN regressor needs task parameter
-            return model_cls.for_regression(**model_params)
-        elif model_name == 'enhanced_tfn_classifier':
-            # Enhanced TFN is a complete model, not a factory
-            return model_cls(**model_params)
-        else:
-            # Default case
-            return model_cls(**model_params)
+        # Debug: Print what we're passing to the model
+        print(f"    Debug - Model class: {model_cls.__name__}")
+        print(f"    Debug - Model params: {filtered_args}")
+        
+        return model_cls(**filtered_args)
 
 
 def parse_param_sweep(param_sweep_str: str) -> Dict[str, List[Any]]:
@@ -550,7 +549,18 @@ def parse_param_sweep(param_sweep_str: str) -> Dict[str, List[Any]]:
         if ':' not in param_str:
             continue
         
-        param_name, values_str = param_str.split(':', 1)
+        # Split on the last colon to handle nested parameter names
+        parts = param_str.split(':')
+        if len(parts) < 2:
+            continue
+            
+        # Handle nested parameter names (e.g., "evolution:type" -> "evolution_type")
+        if len(parts) > 2:
+            param_name = '_'.join(parts[:-1])  # Join all parts except the last as parameter name
+            values_str = parts[-1]  # Last part contains the values
+        else:
+            param_name, values_str = parts
+        
         values = []
         
         for value_str in values_str.split(','):
@@ -572,6 +582,38 @@ def parse_param_sweep(param_sweep_str: str) -> Dict[str, List[Any]]:
         param_sweep[param_name] = values
     
     return param_sweep
+
+
+def update_config_with_args(config: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
+    """Update config with command line arguments using the same logic as train.py."""
+    # Special mappings for CLI arguments that don't follow dot notation
+    special_mappings = {
+        "learning_rate": "training.lr",
+        "batch_size": "training.batch_size", 
+        "epochs": "training.epochs",
+        "weight_decay": "training.weight_decay",
+        "optimizer": "training.optimizer",
+        "warmup_epochs": "training.warmup_epochs",
+    }
+    
+    for arg_key, arg_val in vars(args).items():
+        if arg_key == "config" or arg_val is None:
+            continue
+            
+        # Handle special mappings
+        if arg_key in special_mappings:
+            config_key = special_mappings[arg_key]
+        else:
+            config_key = arg_key
+            
+        keys = config_key.split(".")
+        d = config
+        for k in keys[:-1]:
+            if k not in d or not isinstance(d[k], dict):
+                d[k] = {}
+            d = d[k]
+        d[keys[-1]] = arg_val
+    return config
 
 
 def main():
@@ -616,11 +658,7 @@ def main():
         config = yaml.safe_load(f)
     
     # Update config with CLI args
-    config['epochs'] = args.epochs
-    if args.warmup_epochs is not None:
-        config['warmup_epochs'] = args.warmup_epochs
-    config['weight_decay'] = args.weight_decay
-    config['track_flops'] = args.track_flops
+    config = update_config_with_args(config, args)
     
     # Parse parameter sweep
     param_sweep = parse_param_sweep(args.param_sweep)

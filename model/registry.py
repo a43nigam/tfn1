@@ -18,7 +18,7 @@ EnhancedTFNClassifier = TFNClassifier
 # Time-series regressors can still map to UnifiedTFN if needed; keep imports minimal
 # Deprecated/legacy 2-D implementation replaced by ImageTFN but registry keeps entry for compat
 # Enhanced TFN model
-from .tfn_enhanced import EnhancedTFNModel
+from .tfn_enhanced import EnhancedTFNModel, EnhancedTFNRegressor
 from .tfn_pytorch import ImageTFN as TFNClassifier2D  # alias for 2D image model
 from .baselines import TransformerBaseline, PerformerBaseline, LSTMBaseline, CNNBaseline
 from .seq_baselines import TFNSeqModel, SimpleTransformerSeqModel, SimplePerformerSeqModel
@@ -136,6 +136,27 @@ MODEL_REGISTRY = {
         }
     },
     
+    'enhanced_tfn_regressor': {
+        'class': EnhancedTFNRegressor,
+        'task_type': 'regression',
+        'evolution_types': ['diffusion', 'wave', 'schrodinger', 'cnn', 'spatially_varying_pde', 'modernized_cnn'],
+        'components': ['field_projection', 'field_interference', 'field_evolution', 'field_sampling'],
+        'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len', 'kernel_type', 'interference_type'],
+        'optional_params': ['num_layers', 'evolution_type', 'grid_size', 'num_heads', 'dropout'],
+        'physics_params': ['use_physics_constraints', 'constraint_weight'],
+        'defaults': {
+            'num_layers': 1,
+            'kernel_type': 'film_learnable',
+            'evolution_type': 'diffusion',
+            'interference_type': 'causal',
+            'grid_size': 100,
+            'num_heads': 8,
+            'dropout': 0.1,
+            'use_physics_constraints': False,
+            'constraint_weight': 0.1
+        }
+    },
+    
     'enhanced_tfn_language_model': {
         'class': EnhancedTFNModel,
         'task_type': 'language_modeling',
@@ -153,7 +174,6 @@ MODEL_REGISTRY = {
             'num_heads': 8,
             'dropout': 0.1,
             'max_seq_len': 512,
-
             'use_physics_constraints': False,
             'constraint_weight': 0.1
         }
@@ -320,8 +340,8 @@ TASK_COMPATIBILITY = {
         'datasets': ['sst2', 'mrpc', 'qqp', 'qnli', 'rte', 'cola', 'wnli', 'arxiv']
     },
     'regression': {
-        'models': ['tfn_regressor', 'transformer_regressor', 'performer_regressor', 
-                  'lstm_regressor', 'cnn_regressor'],
+        'models': ['tfn_regressor', 'enhanced_tfn_regressor', 'transformer_regressor', 
+                  'performer_regressor', 'lstm_regressor', 'cnn_regressor'],
         'datasets': ['stsb']
     },
     'time_series': {
