@@ -29,6 +29,35 @@ This approach provides:
 
 ## 🤖 Models
 
+### Model Architecture Comparison
+
+#### **Regular TFN vs Enhanced TFN**
+
+| Feature | Regular TFN | Enhanced TFN |
+|---------|-------------|--------------|
+| **Interference** | Optional (basic) | Required (advanced) |
+| **Evolution Types** | 2 types (`cnn`, `pde`) | 6+ types (`diffusion`, `wave`, `schrodinger`, `cnn`, `spatially_varying_pde`, `modernized_cnn`) |
+| **Physics Constraints** | No | Optional (`use_physics_constraints`) |
+| **Field Dynamics** | Simple evolution | Unified dynamics with integrated interference |
+| **Kernel Types** | Basic kernels | Advanced kernels (FiLM, data-dependent) |
+| **Components** | `field_projection → field_evolution → field_sampling` | `field_projection → field_interference → field_evolution → field_sampling` |
+| **Use Cases** | General purpose, simple tasks | Physics-inspired, complex sequential data |
+
+#### **When to Use Each**
+
+**Use Regular TFN when:**
+- Simple tasks with basic requirements
+- Want minimal complexity
+- Don't need advanced interference
+- Working with limited computational resources
+
+**Use Enhanced TFN when:**
+- Need advanced field dynamics
+- Want physics-inspired constraints
+- Working with complex sequential data
+- Need causal or multi-scale interference
+- Want maximum model expressiveness
+
 ### Core TFN Models
 
 #### `tfn_classifier`
@@ -96,19 +125,71 @@ This approach provides:
 ### Enhanced TFN Models
 
 #### `enhanced_tfn_classifier`
-- **Purpose**: Enhanced classification with advanced field dynamics
-- **Features**: Improved field evolution, adaptive time stepping, physics constraints
+- **Purpose**: Enhanced classification with advanced field dynamics and integrated interference
+- **Features**: Unified field dynamics, physics constraints, advanced interference mechanisms
 - **Compatible Datasets**: Same as base classifier
-- **Additional Parameters**:
-  - `kernel_hidden_dim`: Hidden dimension for data-dependent kernels
-  - `evolution_hidden_dim`: Hidden dimension for evolution predictors
-  - `num_frequencies`: Number of frequencies for multi-frequency kernels
-  - `min_dt`, `max_dt`: Adaptive time stepping bounds
+- **Required Parameters**:
+  - `vocab_size`: Vocabulary size
+  - `embed_dim`: Embedding dimension
+  - `kernel_type`: Field emission kernel type
+  - `interference_type`: Field interference type (required)
+- **Optional Parameters**:
+  - `num_layers`: Number of TFN layers (default: 2)
+  - `evolution_type`: Field evolution strategy (default: "diffusion")
+  - `grid_size`: Spatial grid size (default: 100)
+  - `num_heads`: Number of interference heads (default: 8)
+  - `dropout`: Dropout rate (default: 0.1)
+  - `use_physics_constraints`: Enable physics constraints (default: False)
+  - `constraint_weight`: Physics constraint weight (default: 0.1)
+  - `positional_embedding_strategy`: Positional embedding strategy
+  - `calendar_features`: Calendar features for time-based embeddings
+  - `feature_cardinalities`: JSON string of feature cardinalities
 
 #### `enhanced_tfn_regressor`
-- **Purpose**: Enhanced regression with advanced field dynamics
-- **Features**: Same as enhanced classifier
+- **Purpose**: Enhanced regression with advanced field dynamics and integrated interference
+- **Features**: Unified field dynamics, physics constraints, advanced interference mechanisms
 - **Compatible Datasets**: Same as base regressor
+- **Required Parameters**:
+  - `input_dim`: Input feature dimension
+  - `embed_dim`: Embedding dimension
+  - `output_dim`: Output feature dimension
+  - `output_len`: Output sequence length
+  - `kernel_type`: Field emission kernel type
+  - `interference_type`: Field interference type (required)
+- **Optional Parameters**:
+  - `num_layers`: Number of TFN layers (default: 1)
+  - `evolution_type`: Field evolution strategy (default: "diffusion")
+  - `grid_size`: Spatial grid size (default: 100)
+  - `num_heads`: Number of interference heads (default: 8)
+  - `dropout`: Dropout rate (default: 0.1)
+  - `use_physics_constraints`: Enable physics constraints (default: False)
+  - `constraint_weight`: Physics constraint weight (default: 0.1)
+  - `positional_embedding_strategy`: Positional embedding strategy
+  - `calendar_features`: Calendar features for time-based embeddings
+  - `feature_cardinalities`: JSON string of feature cardinalities
+
+#### `enhanced_tfn_language_model`
+- **Purpose**: Enhanced language modeling with advanced field dynamics
+- **Features**: Unified field dynamics, physics constraints, advanced interference mechanisms
+- **Compatible Datasets**: Same as base language model
+- **Required Parameters**:
+  - `vocab_size`: Vocabulary size
+  - `embed_dim`: Embedding dimension
+  - `num_layers`: Number of TFN layers
+  - `kernel_type`: Field emission kernel type
+  - `interference_type`: Field interference type (required)
+- **Optional Parameters**:
+  - `pos_dim`: Position dimension (default: 1)
+  - `evolution_type`: Field evolution strategy (default: "diffusion")
+  - `grid_size`: Spatial grid size (default: 100)
+  - `num_heads`: Number of interference heads (default: 8)
+  - `dropout`: Dropout rate (default: 0.1)
+  - `max_seq_len`: Maximum sequence length (default: 512)
+  - `use_physics_constraints`: Enable physics constraints (default: False)
+  - `constraint_weight`: Physics constraint weight (default: 0.1)
+  - `positional_embedding_strategy`: Positional embedding strategy
+  - `calendar_features`: Calendar features for time-based embeddings
+  - `feature_cardinalities`: JSON string of feature cardinalities
 
 ### Baseline Models
 
@@ -218,7 +299,7 @@ Field evolution determines how continuous fields evolve over time in the spatial
 - **Method**: Convolutional neural network-based evolution
 - **Properties**: Learned spatial dynamics, efficient computation
 - **Best For**: General-purpose field evolution
-- **Models**: All TFN models
+- **Models**: Regular TFN models (default), Enhanced TFN models
 - **Parameters**:
   - `hidden_dim`: Hidden dimension for CNN layers (default: 128)
 
@@ -226,7 +307,7 @@ Field evolution determines how continuous fields evolve over time in the spatial
 - **Method**: Modern CNN with depthwise convolutions and GLU
 - **Properties**: Improved efficiency, better gradient flow
 - **Best For**: Large-scale models, efficiency-critical applications
-- **Models**: All TFN models
+- **Models**: Enhanced TFN models only
 - **Parameters**:
   - `hidden_dim`: Hidden dimension (default: 64)
   - `kernel_sizes`: List of kernel sizes (default: [3, 5, 7])
@@ -238,7 +319,7 @@ Field evolution determines how continuous fields evolve over time in the spatial
 - **Mathematical Form**: `∂F/∂t = α∇²F`
 - **Properties**: Physics-inspired, smooth evolution
 - **Best For**: Smooth field dynamics, physics-constrained problems
-- **Models**: All TFN models
+- **Models**: Regular TFN models, Enhanced TFN models (default)
 - **Parameters**:
   - `dt`: Time step size (default: 0.01)
 
@@ -247,7 +328,7 @@ Field evolution determines how continuous fields evolve over time in the spatial
 - **Mathematical Form**: `∂²F/∂t² = c²∇²F`
 - **Properties**: Oscillatory dynamics, wave-like propagation
 - **Best For**: Oscillatory patterns, wave-like phenomena
-- **Models**: All TFN models
+- **Models**: Enhanced TFN models only
 - **Parameters**:
   - `dt`: Time step size (default: 0.01)
 
@@ -256,7 +337,7 @@ Field evolution determines how continuous fields evolve over time in the spatial
 - **Mathematical Form**: `iℏ∂F/∂t = ĤF`
 - **Properties**: Complex-valued evolution, quantum-inspired
 - **Best For**: Complex-valued fields, quantum-inspired dynamics
-- **Models**: All TFN models
+- **Models**: Enhanced TFN models only
 - **Parameters**:
   - `dt`: Time step size (default: 0.01)
 
@@ -264,7 +345,7 @@ Field evolution determines how continuous fields evolve over time in the spatial
 - **Method**: PDE with spatially varying coefficients
 - **Properties**: Adaptive to spatial structure
 - **Best For**: Spatially inhomogeneous problems
-- **Models**: All TFN models
+- **Models**: Enhanced TFN models only
 - **Parameters**:
   - `hidden_dim`: Hidden dimension for coefficient prediction (default: 64)
   - `kernel_size`: Kernel size for spatial averaging (default: 3)
@@ -273,7 +354,7 @@ Field evolution determines how continuous fields evolve over time in the spatial
 - **Method**: Adaptive time stepping based on field gradients
 - **Properties**: Automatic time step adjustment
 - **Best For**: Stability-critical applications
-- **Models**: All TFN models
+- **Models**: Enhanced TFN models only
 - **Parameters**:
   - `base_dt`: Base time step (default: 0.01)
   - `min_dt`: Minimum time step (default: 0.001)
@@ -290,7 +371,7 @@ Field interference determines how different token fields interact with each othe
 - **Method**: Standard token field interference
 - **Properties**: Multi-head interference, learnable coupling
 - **Best For**: General-purpose field interactions
-- **Models**: All TFN models
+- **Models**: Regular TFN models (default), Enhanced TFN models
 - **Parameters**:
   - `num_heads`: Number of interference heads (default: 8)
   - `interference_types`: Types of interference ("constructive", "destructive", "phase")
@@ -299,14 +380,14 @@ Field interference determines how different token fields interact with each othe
 - **Method**: Causal field interference (respects temporal order)
 - **Properties**: Temporal causality, autoregressive behavior
 - **Best For**: Sequential data, autoregressive generation
-- **Models**: All TFN models
+- **Models**: Enhanced TFN models (default for regressor)
 - **Parameters**: Same as standard
 
 #### `multi_scale`
 - **Method**: Multi-scale field interference
 - **Properties**: Multi-resolution interactions
 - **Best For**: Multi-scale patterns, hierarchical structure
-- **Models**: All TFN models
+- **Models**: Enhanced TFN models only
 - **Parameters**:
   - `scales`: Number of scales (default: 4)
   - Other parameters same as standard
@@ -315,7 +396,7 @@ Field interference determines how different token fields interact with each othe
 - **Method**: Physics-constrained interference
 - **Properties**: Energy conservation, symmetry constraints
 - **Best For**: Physics-inspired problems, constrained dynamics
-- **Models**: All TFN models
+- **Models**: Enhanced TFN models only
 - **Parameters**:
   - `energy_weight`: Energy conservation weight (default: 0.1)
   - `symmetry_weight`: Symmetry constraint weight (default: 0.1)
