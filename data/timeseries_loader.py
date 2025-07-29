@@ -4,12 +4,128 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
-# Consolidated split helper
-from .split_utils import get_split_sizes, DEFAULT_SPLIT_FRAC
+from abc import ABC, abstractmethod
 from typing import Optional, Tuple, Dict, Any, List
 
+# Consolidated split helper
+from .split_utils import get_split_sizes, DEFAULT_SPLIT_FRAC
 # Dynamic data path resolution (e.g., Kaggle input datasets)
 from . import resolve_data_path
+
+
+class NormalizationStrategy(ABC):
+    """Abstract base class for normalization strategies."""
+    
+    @abstractmethod
+    def fit(self, data: np.ndarray) -> None:
+        """Fit the normalizer on training data."""
+        pass
+    
+    @abstractmethod
+    def transform(self, data: np.ndarray) -> np.ndarray:
+        """Transform data using fitted parameters."""
+        pass
+    
+    @abstractmethod
+    def inverse_transform(self, data: np.ndarray) -> np.ndarray:
+        """Inverse transform for denormalization."""
+        pass
+
+
+class GlobalStandardScaler(NormalizationStrategy):
+    """Global standardization (current behavior) - fit on train, apply to all splits."""
+    
+    def __init__(self):
+        self.scaler = StandardScaler()
+        self._is_fitted = False
+    
+    def fit(self, data: np.ndarray) -> None:
+        """Fit scaler on training data."""
+        self.scaler.fit(data)
+        self._is_fitted = True
+    
+    def transform(self, data: np.ndarray) -> np.ndarray:
+        """Transform data using fitted scaler."""
+        if not self._is_fitted:
+            raise ValueError("Scaler must be fitted before transform")
+        return self.scaler.transform(data)
+    
+    def inverse_transform(self, data: np.ndarray) -> np.ndarray:
+        """Inverse transform for denormalization."""
+        if not self._is_fitted:
+            raise ValueError("Scaler must be fitted before inverse_transform")
+        return self.scaler.inverse_transform(data)
+
+
+class InstanceNormalizer(NormalizationStrategy):
+    """Instance normalization - normalize each sample individually."""
+    
+    def __init__(self):
+        self._is_fitted = True  # No fitting needed for instance normalization
+    
+    def fit(self, data: np.ndarray) -> None:
+        """No fitting needed for instance normalization."""
+        pass
+    
+    def transform(self, data: np.ndarray) -> np.ndarray:
+        """Normalize each sample individually (mean=0, std=1)."""
+        if data.ndim == 1:
+            data = data.reshape(-1, 1)
+        
+        # Compute mean and std for each sample
+        mean = np.mean(data, axis=0, keepdims=True)
+        std = np.std(data, axis=0, keepdims=True)
+        
+        # Avoid division by zero
+        std = np.where(std == 0, 1.0, std)
+        
+        return (data - mean) / std
+    
+    def inverse_transform(self, data: np.ndarray) -> np.ndarray:
+        """Instance normalization is not easily invertible - return as-is."""
+        return data
+
+
+class FeatureWiseNormalizer(NormalizationStrategy):
+    """Feature-wise normalization - normalize each feature independently."""
+    
+    def __init__(self):
+        self.feature_means = None
+        self.feature_stds = None
+        self._is_fitted = False
+    
+    def fit(self, data: np.ndarray) -> None:
+        """Fit normalizer on training data."""
+        self.feature_means = np.mean(data, axis=0)
+        self.feature_stds = np.std(data, axis=0)
+        # Avoid division by zero
+        self.feature_stds = np.where(self.feature_stds == 0, 1.0, self.feature_stds)
+        self._is_fitted = True
+    
+    def transform(self, data: np.ndarray) -> np.ndarray:
+        """Transform data using fitted parameters."""
+        if not self._is_fitted:
+            raise ValueError("Normalizer must be fitted before transform")
+        return (data - self.feature_means) / self.feature_stds
+    
+    def inverse_transform(self, data: np.ndarray) -> np.ndarray:
+        """Inverse transform for denormalization."""
+        if not self._is_fitted:
+            raise ValueError("Normalizer must be fitted before inverse_transform")
+        return data * self.feature_stds + self.feature_means
+
+
+def create_normalization_strategy(strategy_name: str) -> NormalizationStrategy:
+    """Factory function to create normalization strategies."""
+    if strategy_name == "global":
+        return GlobalStandardScaler()
+    elif strategy_name == "instance":
+        return InstanceNormalizer()
+    elif strategy_name == "feature_wise":
+        return FeatureWiseNormalizer()
+    else:
+        raise ValueError(f"Unknown normalization strategy: {strategy_name}")
+
 
 class ETTDataset(Dataset):
     """
@@ -26,18 +142,34 @@ class ETTDataset(Dataset):
         input_len: int = 96,
         output_len: int = 24,
         target_col: int = -1,
+        instance_normalize: bool = False,
     ) -> None:
         super().__init__()
         self.data = data  # shape: [num_samples, num_features]
         self.input_len = input_len
         self.output_len = output_len
         self.target_col = target_col
+        self.instance_normalize = instance_normalize
         self.indices = self._compute_indices()
 
     def _compute_indices(self) -> List[int]:
         # Only indices where both input and output windows fit
         total_len = self.input_len + self.output_len
         return [i for i in range(len(self.data) - total_len + 1)]
+
+    def _normalize_instance(self, x: np.ndarray) -> np.ndarray:
+        """Apply instance normalization to a single sample."""
+        if x.ndim == 1:
+            x = x.reshape(-1, 1)
+        
+        # Compute mean and std for this instance
+        mean = np.mean(x, axis=0, keepdims=True)
+        std = np.std(x, axis=0, keepdims=True)
+        
+        # Avoid division by zero
+        std = np.where(std == 0, 1.0, std)
+        
+        return (x - mean) / std
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -46,6 +178,11 @@ class ETTDataset(Dataset):
         i = self.indices[idx]
         x = self.data[i : i + self.input_len]  # [input_len, input_dim]
         y = self.data[i + self.input_len : i + self.input_len + self.output_len, self.target_col]  # [output_len]
+        
+        # Apply instance normalization if enabled
+        if self.instance_normalize:
+            x = self._normalize_instance(x)
+        
         # If output is 1D, add feature dim
         if y.ndim == 1:
             y = y[:, None]
@@ -61,15 +198,39 @@ class ETTDataset(Dataset):
         output_len: int = 24,
         split_frac: Dict[str, float] | None = None,
         target_col: Optional[str] = 'OT',
+        normalization_strategy: str = "global",
+        instance_normalize: bool = False,
     ) -> Tuple['ETTDataset', 'ETTDataset', 'ETTDataset']:
         """
         Loads CSV, splits chronologically, fits scaler on train, applies to all, returns datasets.
+        
+        Args:
+            csv_path: Path to CSV file
+            input_len: Input sequence length
+            output_len: Output sequence length
+            split_frac: Split fractions for train/val/test
+            target_col: Target column name or index
+            normalization_strategy: Normalization strategy ("global", "instance", "feature_wise")
+            instance_normalize: Whether to apply instance normalization in __getitem__
         """
         csv_path = resolve_data_path(csv_path)
         df = pd.read_csv(csv_path)
-        # Drop date/time column if present
+        
+        # Extract calendar features if available
+        calendar_features = None
         if 'date' in df.columns:
+            # Store calendar features for potential use in embeddings
+            date_series = pd.to_datetime(df['date'])
+            calendar_features = {
+                'hour': date_series.dt.hour.values,
+                'day_of_week': date_series.dt.dayofweek.values,
+                'day_of_month': date_series.dt.day.values,
+                'month': date_series.dt.month.values,
+                'is_weekend': (date_series.dt.dayofweek >= 5).astype(int).values,
+            }
+            # Drop date column for feature processing
             df = df.drop(columns=['date'])
+        
         # Determine target column index
         if target_col is not None:
             if isinstance(target_col, str):
@@ -78,26 +239,46 @@ class ETTDataset(Dataset):
                 target_idx = int(target_col)
         else:
             target_idx = -1  # last column
+        
         data = df.values.astype(np.float32)
         n_train, n_val, n_test = get_split_sizes(len(data), split_frac)
+        
         # Chronological split
         train_data = data[:n_train]
         val_data = data[n_train:n_train+n_val]
         test_data = data[n_train+n_val:]
-        # Normalize (fit scaler on train, apply to all)
-        scaler = StandardScaler().fit(train_data)
-        train_data = scaler.transform(train_data)
-        val_data = scaler.transform(val_data)
-        test_data = scaler.transform(test_data)
-        # Build datasets
-        train_ds = ETTDataset(train_data, input_len, output_len, target_col=target_idx)
-        val_ds = ETTDataset(val_data, input_len, output_len, target_col=target_idx)
-        test_ds = ETTDataset(test_data, input_len, output_len, target_col=target_idx)
         
-        # Attach the scaler to all datasets for denormalization during evaluation
-        train_ds.scaler = scaler
-        val_ds.scaler = scaler
-        test_ds.scaler = scaler
+        # Apply normalization strategy
+        normalizer = create_normalization_strategy(normalization_strategy)
+        
+        if normalization_strategy == "global":
+            # Fit on train, apply to all splits
+            normalizer.fit(train_data)
+            train_data = normalizer.transform(train_data)
+            val_data = normalizer.transform(val_data)
+            test_data = normalizer.transform(test_data)
+        elif normalization_strategy == "feature_wise":
+            # Fit on train, apply to all splits
+            normalizer.fit(train_data)
+            train_data = normalizer.transform(train_data)
+            val_data = normalizer.transform(val_data)
+            test_data = normalizer.transform(test_data)
+        elif normalization_strategy == "instance":
+            # Instance normalization is applied in __getitem__, no preprocessing needed
+            pass
+        
+        # Build datasets
+        train_ds = ETTDataset(train_data, input_len, output_len, target_col=target_idx, 
+                             instance_normalize=instance_normalize)
+        val_ds = ETTDataset(val_data, input_len, output_len, target_col=target_idx,
+                           instance_normalize=instance_normalize)
+        test_ds = ETTDataset(test_data, input_len, output_len, target_col=target_idx,
+                            instance_normalize=instance_normalize)
+        
+        # Attach the normalizer and calendar features to all datasets
+        for ds in [train_ds, val_ds, test_ds]:
+            ds.normalizer = normalizer
+            ds.calendar_features = calendar_features
         
         return train_ds, val_ds, test_ds
 

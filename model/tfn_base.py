@@ -9,11 +9,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.fft
 import math
-from typing import Optional, Tuple, Literal
+from typing import Optional, Tuple, Literal, Dict, Any, List
 
 from core.field_projection import FieldProjector
 from core.field_evolution import FieldEvolver
 from core.field_sampling import FieldSampler
+from .shared_layers import create_positional_embedding_strategy
 
 
 class LearnableKernels(nn.Module):
@@ -76,94 +77,82 @@ class LearnableKernels(nn.Module):
 
 
 class TrainableEvolution(nn.Module):
-    """Trainable field evolution module."""
+    """Learnable field evolution with different evolution types."""
     
-    def __init__(
-        self,
-        embed_dim: int,
-        evolution_type: str = "cnn",
-        time_steps: int = 3,
-        dropout: float = 0.0,
-    ):
-        """Create a trainable field evolution module.
-
-        Parameters
-        ----------
-        embed_dim : int
-            Embedding dimension of the field.
-        evolution_type : str, default "cnn"
-            Evolution operator to use ("cnn" or "pde").
-        time_steps : int, default 3
-            How many evolution sub-steps to perform.
-        dropout : float, default 0.0
-            Dropout probability *inside* the evolution operator. This allows
-            additional regularisation beyond the layer-level dropout and can
-            be tuned from the CLI via the existing ``--dropout`` flag.
-        """
+    def __init__(self, embed_dim: int, evolution_type: str = "cnn", time_steps: int = 3, dropout: float = 0.1):
         super().__init__()
+        self.embed_dim = embed_dim
         self.evolution_type = evolution_type
         self.time_steps = time_steps
-        self.embed_dim = embed_dim
-
-        # ---------------------------------------------------------------
-        # Robustness: argparse may pass *all* CLI values as strings when no
-        # explicit ``type=float`` is set. Convert here to guarantee `float`.
-        # ---------------------------------------------------------------
-        if isinstance(dropout, str):
-            try:
-                dropout = float(dropout)
-            except ValueError:
-                raise ValueError(f"dropout must be float-compatible, got {dropout!r}")
-
-        # Dedicated evolution dropout (Identity if p=0 to avoid overhead)
-        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
-
+        self.dropout = nn.Dropout(dropout)
+        
         if evolution_type == "cnn":
-            # Learnable CNN evolution
-            self.conv_layers = nn.ModuleList([
-                nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=1, bias=False)
-                for _ in range(time_steps)
-            ])
-            # Initialize weights
-            for conv in self.conv_layers:
-                nn.init.normal_(conv.weight, 0, 0.1)
-
-        elif evolution_type in ["pde", "diffusion"]:
-            # Learnable diffusion coefficient
-            self.alpha = nn.Parameter(torch.tensor(0.1))
+            # CNN-based evolution
+            self.conv1 = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=1)
+            self.conv2 = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=1)
+            self.bn1 = nn.BatchNorm1d(embed_dim)
+            self.bn2 = nn.BatchNorm1d(embed_dim)
+            self.residual = nn.Linear(embed_dim, embed_dim)
+            
+        elif evolution_type == "pde":
+            # PDE-based evolution parameters
+            self.diffusion_coeff = nn.Parameter(torch.tensor(0.1))
             self.dt = nn.Parameter(torch.tensor(0.01))
+            
+        elif evolution_type == "wave":
+            # Wave equation parameters
+            self.wave_speed = nn.Parameter(torch.tensor(1.0))
+            self.dt = nn.Parameter(torch.tensor(0.01))
+            
+        elif evolution_type == "schrodinger":
+            # Schrödinger equation parameters
+            self.hamiltonian = nn.Parameter(torch.randn(embed_dim, embed_dim))
+            self.dt = nn.Parameter(torch.tensor(0.01))
+            
+        else:
+            raise ValueError(f"Unknown evolution type: {evolution_type}")
     
     def forward(self, field: torch.Tensor, grid_points: torch.Tensor) -> torch.Tensor:
-        """Evolve field with trainable parameters."""
+        """Evolve field using specified evolution type."""
         if self.evolution_type == "cnn":
             return self._cnn_evolution(field)
-        elif self.evolution_type in ["pde", "diffusion"]:
+        elif self.evolution_type == "pde":
             return self._pde_evolution(field, grid_points)
+        elif self.evolution_type == "wave":
+            return self._wave_evolution(field, grid_points)
+        elif self.evolution_type == "schrodinger":
+            return self._schrodinger_evolution(field)
         else:
             raise ValueError(f"Unknown evolution type: {self.evolution_type}")
     
     def _cnn_evolution(self, field: torch.Tensor) -> torch.Tensor:
-        """CNN evolution with cached layers."""
-        evolved = field
-        for conv in self.conv_layers:
-            # [B, M, D] -> [B, D, M] -> [B, D, M] -> [B, M, D]
-            evolved = evolved.transpose(1, 2)
-            evolved = conv(evolved)
-            evolved = evolved.transpose(1, 2)
-            evolved = F.relu(evolved)
-            # ------------------ internal dropout ------------------
-            evolved = self.dropout(evolved)
-        return evolved
+        """CNN-based field evolution."""
+        batch_size, num_points, embed_dim = field.shape
+        
+        # Reshape for 1D convolution: [B, D, M]
+        field_conv = field.transpose(1, 2)
+        
+        for _ in range(self.time_steps):
+            # CNN evolution
+            x = F.relu(self.bn1(self.conv1(field_conv)))
+            x = F.relu(self.bn2(self.conv2(x)))
+            
+            # Residual connection
+            field_conv = field_conv + self.residual(field_conv.transpose(1, 2)).transpose(1, 2)
+            field_conv = field_conv + x
+            
+            # Apply dropout
+            field_conv = self.dropout(field_conv)
+        
+        # Reshape back: [B, D, M] -> [B, M, D]
+        return field_conv.transpose(1, 2)
     
     def _pde_evolution(self, field: torch.Tensor, grid_points: torch.Tensor) -> torch.Tensor:
-        """PDE evolution with learnable coefficients."""
-        B, M, D = field.shape
-        
-        # Learnable parameters
-        alpha = torch.clamp(self.alpha, min=0.01, max=1.0)
+        """PDE-based field evolution (diffusion equation)."""
+        evolved = field.clone()
         dt = torch.clamp(self.dt, min=0.001, max=0.1)
+        alpha = torch.clamp(self.diffusion_coeff, min=0.01, max=1.0)
         
-        evolved = field
         for _ in range(self.time_steps):
             # Compute Laplacian
             laplacian = torch.zeros_like(evolved)
@@ -173,36 +162,47 @@ class TrainableEvolution(nn.Module):
             evolved = evolved + alpha * dt * laplacian
         
         return evolved
-
-
-class PositionEmbeddings(nn.Module):
-    """Learnable position embeddings."""
     
-    def __init__(self, embed_dim: int, max_seq_len: int = 512):
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.max_seq_len = max_seq_len
+    def _wave_evolution(self, field: torch.Tensor, grid_points: torch.Tensor) -> torch.Tensor:
+        """Wave equation evolution."""
+        # Simplified wave equation implementation
+        evolved = field.clone()
+        dt = torch.clamp(self.dt, min=0.001, max=0.1)
+        c = torch.clamp(self.wave_speed, min=0.1, max=10.0)
         
-        # Learnable position embeddings
-        self.pos_embeddings = nn.Parameter(torch.randn(max_seq_len, embed_dim))
-        nn.init.normal_(self.pos_embeddings, 0, 0.1)
+        for _ in range(self.time_steps):
+            # Second derivative in space
+            d2x = torch.zeros_like(evolved)
+            d2x[:, 1:-1, :] = (evolved[:, 2:, :] - 2 * evolved[:, 1:-1, :] + evolved[:, :-2, :])
+            
+            # Wave equation: ∂²u/∂t² = c² ∂²u/∂x²
+            evolved = evolved + c * c * dt * dt * d2x
+        
+        return evolved
     
-    def forward(self, positions: torch.Tensor) -> torch.Tensor:
-        """Convert continuous positions to embeddings."""
-        B, N, P = positions.shape
+    def _schrodinger_evolution(self, field: torch.Tensor) -> torch.Tensor:
+        """Schrödinger equation evolution."""
+        evolved = field.clone()
+        dt = torch.clamp(self.dt, min=0.001, max=0.1)
         
-        # Scale positions to [0, max_seq_len-1]
-        pos_scaled = positions.view(B, N) * (self.max_seq_len - 1)
-        pos_indices = torch.clamp(pos_scaled.long(), 0, self.max_seq_len - 1)
+        # Create Hermitian Hamiltonian
+        H = self.hamiltonian
+        H_real = (H + H.T) / 2  # Symmetric real part
+        H_imag = (H - H.T) / 2  # Anti-Hermitian imaginary part
         
-        # Gather position embeddings
-        pos_emb = torch.gather(
-            self.pos_embeddings.unsqueeze(0).expand(B, -1, -1),
-            1,
-            pos_indices.unsqueeze(-1).expand(-1, -1, self.embed_dim)
-        )
+        for _ in range(self.time_steps):
+            # Apply Hamiltonian: HF
+            hamiltonian_evolution_real = torch.einsum('bnd,de->bne', evolved, H_real)
+            hamiltonian_evolution_imag = torch.einsum('bnd,de->bne', evolved, H_imag)
+            
+            # For Schrödinger equation: i∂F/∂t = HF
+            # ∂F/∂t = -i*HF = H_imag*F - i*H_real*F
+            # Since we work with real fields, we take the real part
+            evolution_real = hamiltonian_evolution_imag  # Real part of -i*HF
+            
+            evolved = evolved + dt * evolution_real
         
-        return pos_emb
+        return evolved
 
 
 class TrainableTFNLayer(nn.Module):
@@ -210,7 +210,10 @@ class TrainableTFNLayer(nn.Module):
     
     def __init__(self, embed_dim: int, kernel_type: str = "rbf", evolution_type: str = "cnn",
                  grid_size: int = 100, time_steps: int = 3, max_seq_len: int = 512,
-                 dropout: float = 0.1, layer_norm_eps: float = 1e-5):
+                 dropout: float = 0.1, layer_norm_eps: float = 1e-5,
+                 positional_embedding_strategy: str = "learned",
+                 calendar_features: Optional[List[str]] = None,
+                 feature_cardinalities: Optional[Dict[str, int]] = None):
         super().__init__()
         self.embed_dim = embed_dim
         self.grid_size = grid_size
@@ -226,7 +229,15 @@ class TrainableTFNLayer(nn.Module):
             time_steps,
             dropout=dropout,
         )
-        self.pos_embeddings = PositionEmbeddings(embed_dim, max_seq_len)
+        
+        # Create positional embedding strategy
+        self.pos_embeddings = create_positional_embedding_strategy(
+            positional_embedding_strategy,
+            max_seq_len,
+            embed_dim,
+            calendar_features=calendar_features,
+            feature_cardinalities=feature_cardinalities
+        )
         
         # Standard transformer components
         self.layer_norm1 = nn.LayerNorm(embed_dim, eps=layer_norm_eps)
@@ -235,7 +246,7 @@ class TrainableTFNLayer(nn.Module):
         
         # Learnable grid (optional)
         self.learnable_grid = nn.Parameter(torch.linspace(0, 1, grid_size))
-    
+
     def forward(
         self,
         embeddings: torch.Tensor,
@@ -243,6 +254,7 @@ class TrainableTFNLayer(nn.Module):
         use_learnable_grid: bool = False,
         *,
         add_pos_emb: bool = True,
+        calendar_features: Optional[Dict[str, torch.Tensor]] = None,
     ) -> torch.Tensor:
         """
         Forward pass of trainable TFN layer.
@@ -255,6 +267,7 @@ class TrainableTFNLayer(nn.Module):
                 positional embeddings. Set to *False* if the caller has
                 already combined positional information with the token
                 embeddings (to avoid double-counting).
+            calendar_features: Dictionary of calendar features for time-based embeddings
         
         Returns:
             updated_embeddings: [B, N, D] updated embeddings with residual connection
@@ -264,7 +277,7 @@ class TrainableTFNLayer(nn.Module):
 
         # Optionally incorporate positional information ---------------------
         if add_pos_emb:
-            pos_emb = self.pos_embeddings(positions)
+            pos_emb = self.pos_embeddings(positions, calendar_features=calendar_features)
             x = embeddings + pos_emb
         else:
             # Caller has already added positional information

@@ -7,7 +7,6 @@ Clean, reusable model classes for Token Field Networks.
 from .tfn_base import (
     LearnableKernels,
     TrainableEvolution,
-    PositionEmbeddings,
     TrainableTFNLayer
 )
 
@@ -26,7 +25,6 @@ __all__ = [
     # Base components
     'LearnableKernels',
     'TrainableEvolution', 
-    'PositionEmbeddings',
     'TrainableTFNLayer',
     
     # Unified model

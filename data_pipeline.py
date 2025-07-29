@@ -2,7 +2,7 @@ __all__ = ["SyntheticCopyDataset", "pad_collate", "get_dataloader"]
 
 import torch
 from torch.utils.data import Dataset, DataLoader
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from data.timeseries_loader import ETTDataset
 from data.nlp_loader import NLPDataset
 from data.jena_loader import JenaClimateDataset
@@ -128,204 +128,124 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
     """
     data_cfg = config["data"]
     dataset_name = data_cfg.get("dataset_name", "synthetic")
+    
     if dataset_name == "synthetic":
-        model_cfg = config["model"]
-        # Explicit task field in YAML takes precedence; fall back to model_cfg for legacy.
-        task = data_cfg.get("task", model_cfg.get("task", "copy"))
-        
-        # Determine task from model name if not explicitly set
-        model_name = config.get("model_name", "")
-        if task == "copy" and "regressor" in model_name:
-            task = "regression"
-        elif task == "copy" and "classifier" in model_name:
-            task = "classification"
-        
-        num_classes = model_cfg.get("num_classes", 2)
         return SyntheticCopyDataset(
-            dataset_size=data_cfg["dataset_size"],
-            seq_len=data_cfg["seq_len"],
-            vocab_size=model_cfg["vocab_size"],
+            dataset_size=data_cfg.get("dataset_size", 1000),
+            seq_len=data_cfg.get("seq_len", 50),
+            vocab_size=data_cfg.get("vocab_size", 20),
             pad_idx=data_cfg.get("pad_idx", 0),
-            task=task,
-            num_classes=num_classes,
+            task=data_cfg.get("task", "copy"),
+            num_classes=data_cfg.get("num_classes", 2),
         )
+    
     elif dataset_name == "ett":
+        # Handle ETT dataset with new normalization parameters
+        csv_path = data_cfg.get("csv_path", "data/ETTh1.csv")
         input_len = data_cfg.get("input_len", 96)
         output_len = data_cfg.get("output_len", 24)
-        csv_path = data_cfg.get("csv_path", "data/dummy/ETTh1.csv")
-        train, val, test = ETTDataset.get_splits(csv_path, input_len, output_len)
+        normalization_strategy = data_cfg.get("normalization_strategy", "global")
+        instance_normalize = data_cfg.get("instance_normalize", False)
+        
+        # Get splits with new parameters
+        train_ds, val_ds, test_ds = ETTDataset.get_splits(
+            csv_path=csv_path,
+            input_len=input_len,
+            output_len=output_len,
+            normalization_strategy=normalization_strategy,
+            instance_normalize=instance_normalize
+        )
+        
         if split == 'train':
-            return train
+            return train_ds
         elif split == 'val':
-            return val
+            return val_ds
         elif split == 'test':
-            return test
+            return test_ds
         else:
             raise ValueError(f"Unknown split: {split}")
+    
     elif dataset_name == "jena":
-        input_len = data_cfg.get("input_len", 96)
-        output_len = data_cfg.get("output_len", 24)
-        csv_path = data_cfg.get("csv_path", "data/dummy/jena_climate_2009_2016.csv")
-        target_col = data_cfg.get("target_col", "T (degC)")
-        train, val, test = JenaClimateDataset.get_splits(csv_path, input_len, output_len, target_col=target_col)
-        if split == 'train':
-            return train
-        elif split == 'val':
-            return val
-        elif split == 'test':
-            return test
-        else:
-            raise ValueError(f"Unknown split: {split}")
+        return JenaClimateDataset(
+            csv_path=data_cfg.get("csv_path", "data/jena_climate_2009_2016.csv"),
+            input_len=data_cfg.get("input_len", 96),
+            output_len=data_cfg.get("output_len", 24),
+        )
+    
     elif dataset_name == "stock":
-        input_len = data_cfg.get("input_len", 60)
-        output_len = data_cfg.get("output_len", 5)
-        csv_path = data_cfg.get("csv_path", "data/dummy/all_stocks_5yr.csv")
-        target_col = data_cfg.get("target_col", "close")
-        ticker = data_cfg.get("ticker", None)
-        train, val, test = StockMarketDataset.get_splits(csv_path, input_len, output_len, target_col=target_col, ticker=ticker)
-        if split == 'train':
-            return train
-        elif split == 'val':
-            return val
-        elif split == 'test':
-            return test
-        else:
-            raise ValueError(f"Unknown split: {split}")
+        return StockMarketDataset(
+            csv_path=data_cfg.get("csv_path", "data/all_stocks_5yr.csv"),
+            input_len=data_cfg.get("input_len", 60),
+            output_len=data_cfg.get("output_len", 5),
+        )
+    
     elif dataset_name == "glue":
-        file_path = data_cfg.get("file_path")
-        tokenizer_name = data_cfg.get("tokenizer_name", "bert-base-uncased")
-        max_length = data_cfg.get("max_length", 128)
-        text_col = data_cfg.get("text_col", "sentence")
-        label_col = data_cfg.get("label_col", "label")
-        split_frac = data_cfg.get("split_frac", {"train": 0.8, "val": 0.1, "test": 0.1})
-        train, val, test = GLUEDataset.get_splits(file_path, tokenizer_name, max_length, split_frac, text_col, label_col)
-        if split == 'train':
-            return train
-        elif split == 'val':
-            return val
-        elif split == 'test':
-            return test
-        else:
-            raise ValueError(f"Unknown split: {split}")
+        return GLUEDataset(
+            task=data_cfg.get("task", "sst2"),
+            split=split,
+            max_length=data_cfg.get("max_length", 512),
+            tokenizer_name=data_cfg.get("tokenizer_name", "bert-base-uncased"),
+        )
+    
     elif dataset_name == "arxiv":
-        file_path = data_cfg.get("file_path")
-        tokenizer_name = data_cfg.get("tokenizer_name", "bert-base-uncased")
-        max_length = data_cfg.get("max_length", 256)
-        text_col = data_cfg.get("text_col", "abstract")
-        label_col = data_cfg.get("label_col", "category")
-        split_frac = data_cfg.get("split_frac", {"train": 0.8, "val": 0.1, "test": 0.1})
-        train, val, test = ArxivDataset.get_splits(file_path, tokenizer_name, max_length, split_frac, text_col, label_col)
-        if split == 'train':
-            return train
-        elif split == 'val':
-            return val
-        elif split == 'test':
-            return test
-        else:
-            raise ValueError(f"Unknown split: {split}")
+        return ArxivDataset(
+            csv_path=data_cfg.get("csv_path", "data/arxiv_sample.csv"),
+            max_length=data_cfg.get("max_length", 512),
+            tokenizer_name=data_cfg.get("tokenizer_name", "bert-base-uncased"),
+        )
+    
     elif dataset_name == "pg19":
-        import os
-        from data import resolve_data_path
-        # If a direct file_path is given, use it for all splits (assume pre-split tiny CSV)
-        direct_path = data_cfg.get("file_path")
-        if direct_path is not None:
-            file_path = resolve_data_path(direct_path)
-        else:
-            base_path = data_cfg.get("base_path", "/kaggle/input/the-pg19-language-modeling-benchmark-dataset")
-            split_files = {
-                "train": os.path.join(base_path, "train.csv"),
-                "val": os.path.join(base_path, "validation.csv"),
-                "test": os.path.join(base_path, "test.csv"),
-            }
-            file_path = resolve_data_path(split_files[split])
-        tokenizer_name = data_cfg.get("tokenizer_name", "gpt2")
-        max_length = data_cfg.get("max_length", 512)
-        text_col = data_cfg.get("text_col", "text")
-        return PG19Dataset(file_path, tokenizer_name, max_length, text_col=text_col)
+        return PG19Dataset(
+            data_dir=data_cfg.get("data_dir", "data/pg19"),
+            split=split,
+            max_length=data_cfg.get("max_length", 512),
+            tokenizer_name=data_cfg.get("tokenizer_name", "gpt2"),
+        )
+    
     elif dataset_name == "wikitext":
-        wikitext_dataset_name = data_cfg.get("wikitext_dataset_name", "wikitext-2-raw-v1")
-        tokenizer_name = data_cfg.get("tokenizer_name", "gpt2")
-        max_length = data_cfg.get("max_length", 512)
-        text_col = data_cfg.get("text_col", "text")
-        max_samples = data_cfg.get("max_samples", None)
-        use_streaming = data_cfg.get("use_streaming", False)
-        split_map = {"train": "train", "val": "validation", "test": "test"}
-        return WikiTextDataset(wikitext_dataset_name, tokenizer_name, max_length, split=split_map[split], text_col=text_col, use_streaming=use_streaming, max_samples=max_samples)
-    elif dataset_name == "nlp":
-        file_path = data_cfg.get("file_path")
-        tokenizer_name = data_cfg.get("tokenizer_name", "bert-base-uncased")
-        max_length = data_cfg.get("max_length", 128)
-        split_frac = data_cfg.get("split_frac", {"train": 0.8, "val": 0.1, "test": 0.1})
-        train, val, test = NLPDataset.get_splits(file_path, tokenizer_name, max_length, split_frac)
-        if split == 'train':
-            return train
-        elif split == 'val':
-            return val
-        elif split == 'test':
-            return test
-        else:
-            raise ValueError(f"Unknown split: {split}")
-    elif dataset_name == "imdb":
-        from data.imdb_loader import IMDBDataset
-        file_path = data_cfg.get("file_path")
-        tokenizer_name = data_cfg.get("tokenizer_name", "bert-base-uncased")
-        max_length = data_cfg.get("max_length", 256)
-        text_col = data_cfg.get("text_col", "review")
-        label_col = data_cfg.get("label_col", "sentiment")
-        regression_col = data_cfg.get("regression_col", "sentiment")
-        split_frac = data_cfg.get("split_frac", {"train": 0.8, "val": 0.1, "test": 0.1})
-        # Determine task from model_name or config
-        model_name = config.get("model_name", "")
-        if "regressor" in model_name or data_cfg.get("task") == "regression":
-            task = "regression"
-        else:
-            task = "classification"
-        train, val, test = IMDBDataset.get_splits(file_path, tokenizer_name, max_length, split_frac, text_col, label_col, regression_col, task)
-        if split == 'train':
-            return train
-        elif split == 'val':
-            return val
-        elif split == 'test':
-            return test
-        else:
-            raise ValueError(f"Unknown split: {split}")
+        return WikiTextDataset(
+            data_dir=data_cfg.get("data_dir", "data/wikitext"),
+            split=split,
+            max_length=data_cfg.get("max_length", 512),
+            tokenizer_name=data_cfg.get("tokenizer_name", "gpt2"),
+        )
+    
     else:
-        raise ValueError(f"Unknown dataset_name: {dataset_name}")
+        raise ValueError(f"Unknown dataset: {dataset_name}")
 
 def get_dataloader(config: Dict[str, Any], split: str = 'train') -> DataLoader:
     """
-    Given a config dictionary (from YAML), return a PyTorch DataLoader for the specified dataset.
+    Create a DataLoader for the specified dataset and split.
+    
     Args:
-        config: full config dict
-        split: 'train', 'val', or 'test'
+        config: Configuration dictionary
+        split: Dataset split ('train', 'val', 'test')
+    
     Returns:
-        DataLoader
+        DataLoader with appropriate collate function
     """
     dataset = dataloader_factory(config, split)
-    train_cfg = config["training"]
-    dataset_name = config["data"].get("dataset_name", "synthetic")
-    # For synthetic dataset, use its internal task attribute (set by YAML)
-    task = getattr(dataset, "task", "copy")
-    # Use drop_last only for the training split so we don't silently discard
-    # small validation / test sets (which would lead to 0 batches and hence
-    # the "N/A" metrics you observed).
-    drop_last_flag = (split == 'train')
-
-    if dataset_name == "synthetic":
-        dataloader = DataLoader(
-            dataset,
-            batch_size=train_cfg["batch_size"],
-            shuffle=(split == 'train'),
-            collate_fn=lambda batch: pad_collate(batch, pad_idx=config["data"].get("pad_idx", 0), task=task),
-            drop_last=drop_last_flag,
-        )
+    
+    # Determine task type for collate function
+    task = config.get("model", {}).get("task", "classification")
+    if task == "regression":
+        collate_fn = lambda batch: pad_collate(batch, task="regression")
     else:
-        dataloader = DataLoader(
-            dataset,
-            batch_size=train_cfg["batch_size"],
-            shuffle=(split == 'train'),
-            drop_last=drop_last_flag,
-        )
+        collate_fn = lambda batch: pad_collate(batch, task="classification")
+    
+    # Get batch size
+    batch_size = config.get("training", {}).get("batch_size", 32)
+    
+    # Create DataLoader
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=(split == 'train'),
+        collate_fn=collate_fn,
+        num_workers=0,  # Set to 0 for debugging, increase for production
+        drop_last=(split == 'train'),
+    )
+    
     return dataloader
 
 if __name__ == "__main__":

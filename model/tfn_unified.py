@@ -1,43 +1,20 @@
 """
-Unified Token Field Network (TFN)
-================================
-A single, well-parameterized implementation that can be configured for
-sequence **classification** or **regression** tasks while re-using the
-core TFN layer stack (1-D). 2-D / image TFN remains in `tfn_pytorch.py`.
+Unified TFN model for both classification and regression tasks.
 
-Usage Example (CLI / script)::
-
-    model = UnifiedTFN(
-        task="classification",          # or "regression"
-        vocab_size=30522,               # needed for text classification
-        num_classes=4,                  # for classification
-        embed_dim=256,
-        num_layers=4,
-        kernel_type="rbf",
-        evolution_type="cnn",
-    )
-
-Key Design Points
------------------
-• Shared token embedding / input projection depending on `task` type.
-• Same stack of `TrainableTFNLayer` (from `tfn.model.tfn_base`).
-• Final head switched via `task` (classification vs regression).
-• Keeps full CLI configurability: all constructor kwargs are exposed and
-  mapped from argparse flags in training scripts.
-• Keeps tensor-shape comments and docstrings for clarity.
+This module provides a single, configurable TFN model that can handle
+both classification and regression tasks with appropriate input/output heads.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Literal
-
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from typing import Optional, Literal, Dict, Any, List
 
 from .tfn_base import TrainableTFNLayer
-from .tfn_enhanced import EnhancedTFNLayer  # Optional future use
+from .tfn_enhanced import EnhancedTFNLayer
 
+# Type aliases for better readability
 TaskType = Literal["classification", "regression"]
 
 
@@ -75,6 +52,12 @@ class TFN(nn.Module):
     use_enhanced:
         If *True*, uses :class:`EnhancedTFNLayer` instead of
         :class:`TrainableTFNLayer`.
+    positional_embedding_strategy:
+        Positional embedding strategy ("learned", "time_based", "sinusoidal").
+    calendar_features:
+        List of calendar features for time-based embeddings.
+    feature_cardinalities:
+        Cardinality of each calendar feature.
     """
 
     def __init__(
@@ -101,6 +84,10 @@ class TFN(nn.Module):
         pos_min: float = 0.1,
         pos_max: float = 0.9,
         use_enhanced: bool = False,
+        # New parameters for modular embeddings
+        positional_embedding_strategy: str = "learned",
+        calendar_features: Optional[List[str]] = None,
+        feature_cardinalities: Optional[Dict[str, int]] = None,
     ) -> None:
         super().__init__()
 
@@ -129,33 +116,31 @@ class TFN(nn.Module):
             self.input_proj = nn.Linear(input_dim, embed_dim)
 
         # ------------------------------------------------------------------
-        # Core TFN Layers (shared)
+        # TFN Layers
         # ------------------------------------------------------------------
-        
-        # Validate that enhanced features are only used when use_enhanced=True
-        if not use_enhanced:
-            enhanced_kernels = ["data_dependent_rbf", "data_dependent_compact", "film_learnable"]
-            enhanced_evolution = ["spatially_varying_pde", "modernized_cnn"]
-            
-            if kernel_type in enhanced_kernels:
-                raise ValueError(f"Enhanced kernel '{kernel_type}' requires use_enhanced=True")
-            if evolution_type in enhanced_evolution:
-                raise ValueError(f"Enhanced evolution '{evolution_type}' requires use_enhanced=True")
-        
-        layer_cls = EnhancedTFNLayer if use_enhanced else TrainableTFNLayer
         self.tfn_layers = nn.ModuleList()
         
+        # Choose layer class based on use_enhanced flag
+        if use_enhanced:
+            layer_cls = EnhancedTFNLayer
+        else:
+            layer_cls = TrainableTFNLayer
+
         for _ in range(num_layers):
             if use_enhanced:
                 # EnhancedTFNLayer parameters
                 layer = layer_cls(
                     embed_dim=embed_dim,
+                    pos_dim=1,  # 1D for time series
                     kernel_type=kernel_type,
                     evolution_type=evolution_type,
+                    interference_type=interference_type,
                     grid_size=grid_size,
                     num_steps=time_steps,
+                    dt=0.01,  # Default for UnifiedFieldDynamics
                     dropout=dropout,
-                    interference_type=interference_type,
+                    use_physics_constraints=False,
+                    constraint_weight=0.1
                 )
             else:
                 # TrainableTFNLayer parameters
@@ -166,6 +151,9 @@ class TFN(nn.Module):
                     grid_size=grid_size,
                     time_steps=time_steps,
                     dropout=dropout,
+                    positional_embedding_strategy=positional_embedding_strategy,
+                    calendar_features=calendar_features,
+                    feature_cardinalities=feature_cardinalities
                 )
             self.tfn_layers.append(layer)
 
@@ -194,7 +182,8 @@ class TFN(nn.Module):
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
-    def forward(self, inputs: torch.Tensor, positions: Optional[torch.Tensor] = None) -> torch.Tensor:  # type: ignore
+    def forward(self, inputs: torch.Tensor, positions: Optional[torch.Tensor] = None, 
+                calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> torch.Tensor:  # type: ignore
         """Forward pass.
 
         Parameters
@@ -204,39 +193,52 @@ class TFN(nn.Module):
             • Regression      – ``[B, N, input_dim]`` numeric features.
         positions:
             Optional positions ``[B, N, 1]``; auto-generated if *None*.
+        calendar_features:
+            Optional calendar features for time-based embeddings.
         """
-        B, N = inputs.shape[0], inputs.shape[1]
+        B, N = inputs.shape[:2]
 
-        # Embedding / projection ------------------------------------------------
+        # ------------------------------------------------------------------
+        # Input Embedding / Projection
+        # ------------------------------------------------------------------
         if self.task == "classification":
-            x = self.input_embed(inputs)  # [B, N, E]
+            # Token embedding
+            embeddings = self.input_embed(inputs)  # [B, N, embed_dim]
         else:  # regression
-            x = self.input_proj(inputs.float())  # [B, N, E]
+            # Linear projection
+            embeddings = self.input_proj(inputs)  # [B, N, embed_dim]
 
-        # Position handling -----------------------------------------------------
+        # ------------------------------------------------------------------
+        # Position Generation
+        # ------------------------------------------------------------------
         if positions is None:
+            # Generate normalized sequential positions
             positions = torch.linspace(self.pos_min, self.pos_max, N, device=inputs.device)
-            positions = positions.unsqueeze(0).unsqueeze(-1).expand(B, -1, -1)
+            positions = positions.unsqueeze(0).expand(B, -1)  # [B, N]
+            positions = positions.unsqueeze(-1)  # [B, N, 1]
 
         # ------------------------------------------------------------------
-        # Add position embeddings ONCE before the TFN stack
+        # TFN Layers
         # ------------------------------------------------------------------
-        if self.tfn_layers:
-            pos_emb = self.tfn_layers[0].pos_embeddings(positions)
-            x = x + pos_emb
-
-        # TFN layers ------------------------------------------------------------
+        x = embeddings
         for layer in self.tfn_layers:
-            # Skip internal positional addition to avoid double-counting
-            x = layer(x, positions, add_pos_emb=False)
+            if isinstance(layer, TrainableTFNLayer):
+                # Pass calendar features to TrainableTFNLayer
+                x = layer(x, positions, calendar_features=calendar_features)
+            else:
+                # EnhancedTFNLayer doesn't need calendar_features
+                x = layer(x, positions)
 
-        # Output handling for different tasks
+        # ------------------------------------------------------------------
+        # Task-Specific Head
+        # ------------------------------------------------------------------
         if self.task == "classification":
-            # Classification: global average pooling
-            pooled = x.mean(dim=1)  # [B, embed_dim]
+            # Use first token for classification
+            pooled = x[:, 0, :]  # [B, embed_dim]
             out = self.head(pooled)  # [B, num_classes]
         else:  # regression
             # For regression, use the last few tokens for multi-step forecasting
+            # Take the last output_len tokens, or all if sequence is shorter
             seq_len = x.size(1)
             if seq_len >= self.output_len:
                 # Use last output_len tokens
@@ -252,49 +254,25 @@ class TFN(nn.Module):
             pooled_flat = pooled.reshape(-1, embed_dim)  # [B * output_len, embed_dim]
             out_flat = self.head(pooled_flat)  # [B * output_len, output_dim]
             out = out_flat.reshape(batch_size, output_len, self.output_dim)  # [B, output_len, output_dim]
+
         return out
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
     def _init_weights(self) -> None:
-        if hasattr(self, "input_embed"):
-            nn.init.normal_(self.input_embed.weight, 0, 0.1)
-        if hasattr(self, "input_proj"):
-            nn.init.normal_(self.input_proj.weight, 0, 0.1)
+        """Initialize model weights."""
+        # Input embedding/projection initialization
+        if self.task == "classification":
+            nn.init.normal_(self.input_embed.weight, 0, 0.02)
+        else:
+            nn.init.normal_(self.input_proj.weight, 0, 0.02)
             nn.init.zeros_(self.input_proj.bias)
 
-        for mod in self.head:
-            if isinstance(mod, nn.Linear):
-                nn.init.normal_(mod.weight, 0, 0.1)
-                if mod.bias is not None:
-                    nn.init.zeros_(mod.bias)
+        # Head initialization
+        for module in self.head.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.normal_(module.weight, 0, 0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
-    # ------------------------------------------------------------------
-    # Convenient factory methods ---------------------------------------
-    # ------------------------------------------------------------------
-    @classmethod
-    def for_classification(
-        cls,
-        vocab_size: int,
-        num_classes: int,
-        **kwargs,
-    ) -> "TFN":
-        """Factory for classification task."""
-        return cls(task="classification", vocab_size=vocab_size, num_classes=num_classes, **kwargs)
 
-    @classmethod
-    def for_regression(
-        cls,
-        input_dim: int,
-        output_dim: int = 1,
-        **kwargs,
-    ) -> "TFN":
-        """Factory for regression task."""
-        return cls(task="regression", input_dim=input_dim, output_dim=output_dim, **kwargs) 
-
-# ------------------------------------------------------------------
-# Backward-compatibility alias
-# ------------------------------------------------------------------
-
+# Backward compatibility alias
 UnifiedTFN = TFN 

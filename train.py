@@ -14,61 +14,79 @@ from typing import Any, Dict
 # -----------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train TFN on the synthetic copy or regression task")
-    parser.add_argument("--config", type=str, default="configs/tests/synthetic_copy_test.yaml", help="Path to YAML config file.")
-    parser.add_argument("--model_name", type=str, default=None, help="Model to use (e.g., tfn_classifier, tfn_regressor, transformer_regressor, etc.)")
-    parser.add_argument("--output_dir", type=str, default=None, help="Directory to save logs and checkpoints.")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
-    parser.add_argument("--disable_logging", action="store_true", help="Disable logging to external services.")
-    parser.add_argument("--device", type=str, default=None, help="Device to use (cuda, cpu, auto). Default: auto-detect.")
-    parser.add_argument("--learning_rate", type=float, default=None, help="Learning rate for optimizer.")
-    parser.add_argument("--batch_size", type=int, default=None, help="Batch size for training.")
-    parser.add_argument("--epochs", type=int, default=None, help="Number of training epochs.")
-    parser.add_argument("--weight_decay", type=float, default=None, help="L2 regularization strength.")
-    parser.add_argument("--optimizer", type=str, default=None, help="Optimizer to use (adamw, sgd, etc.)")
-    parser.add_argument("--warmup_epochs", type=int, default=None, help="Number of warmup epochs for learning rate scheduling.")
-    parser.add_argument("--model.d_model", type=int, default=None, help="Main hidden dimension of the model.")
-    parser.add_argument("--model.n_layers", type=int, default=None, help="Number of model layers.")
-    parser.add_argument("--model.n_heads", type=int, default=None, help="Number of attention heads.")
-    parser.add_argument("--model.dropout", type=float, default=None, help="Dropout rate for regularization.")
-    parser.add_argument("--data.context_length", type=int, default=None, help="Input sequence length.")
-    parser.add_argument("--data.prediction_length", type=int, default=None, help="Prediction length (for forecasting tasks).")
-    # Additional model flags
-    parser.add_argument("--model.embed_dim", type=int, default=None, help="Embedding dimension for the model.")
-    parser.add_argument("--model.output_dim", type=int, default=None, help="Output dimension for regression models.")
-    parser.add_argument("--model.input_dim", type=int, default=None, help="Input feature dimension for regression models.")
-    parser.add_argument("--model.hidden_dim", type=int, default=None, help="Hidden dimension for LSTM models.")
-    parser.add_argument("--model.proj_dim", type=int, default=None, help="Projection dimension for Performer models.")
-    parser.add_argument("--model.num_filters", type=int, default=None, help="Number of filters for CNN models.")
-    parser.add_argument("--model.filter_sizes", type=str, default=None, help="Filter sizes for CNN models (comma-separated, e.g. '3,4,5').")
-    parser.add_argument("--model.bidirectional", action="store_true", help="Use bidirectional LSTM (flag).")
-    # Enhanced TFN flags
-    parser.add_argument("--model.kernel_type", type=str, default=None, help="Kernel type for TFN (rbf, compact, fourier, learnable, data_dependent_rbf, data_dependent_compact, multi_frequency_fourier, film_learnable).")
-    parser.add_argument("--model.evolution_type", type=str, default=None, help="Evolution type for TFN (cnn, pde, diffusion, wave, schrodinger, spatially_varying_pde, modernized_cnn, adaptive_time_stepping).")
-    parser.add_argument("--model.interference_type", type=str, default=None, help="Interference type for TFN (standard, causal, multiscale, physics).")
-    parser.add_argument("--model.use_data_dependent_kernels", action="store_true", help="Enable data-dependent kernel parameters.")
-    parser.add_argument("--model.use_spatially_varying_pde", action="store_true", help="Enable spatially-varying PDE coefficients.")
-    parser.add_argument("--model.use_adaptive_time_stepping", action="store_true", help="Enable adaptive time stepping.")
-    parser.add_argument("--model.time_steps", type=int, default=None, help="Number of time steps for field evolution.")
-    parser.add_argument("--model.grid_size", type=int, default=None, help="Grid size for field projection.")
+    parser = argparse.ArgumentParser(description="Train TFN models.")
+    parser.add_argument("--config", type=str, required=True, help="Path to config file.")
+    
+    # Model parameters
+    parser.add_argument("--model.task", type=str, default=None, help="Task type: classification or regression.")
+    parser.add_argument("--model.vocab_size", type=int, default=None, help="Vocabulary size for classification.")
+    parser.add_argument("--model.input_dim", type=int, default=None, help="Input dimension for regression.")
+    parser.add_argument("--model.output_dim", type=int, default=None, help="Output dimension for regression.")
+    parser.add_argument("--model.output_len", type=int, default=None, help="Output sequence length for regression.")
+    parser.add_argument("--model.num_classes", type=int, default=None, help="Number of classes for classification.")
+    parser.add_argument("--model.embed_dim", type=int, default=None, help="Embedding dimension.")
     parser.add_argument("--model.num_layers", type=int, default=None, help="Number of TFN layers.")
-    parser.add_argument("--model.use_enhanced", action="store_true", help="Enable enhanced TFN features (data-dependent kernels, advanced evolution, etc.).")
-    parser.add_argument("--model.use_modernized_cnn", action="store_true", help="Use modernized CNN evolution with depthwise separable convolutions.")
+    parser.add_argument("--model.kernel_type", type=str, default=None, help="Kernel type for field projection.")
+    parser.add_argument("--model.evolution_type", type=str, default=None, help="Evolution type for field evolution.")
+    parser.add_argument("--model.interference_type", type=str, default=None, help="Interference type for field interference.")
+    parser.add_argument("--model.grid_size", type=int, default=None, help="Grid size for field discretization.")
+    parser.add_argument("--model.time_steps", type=int, default=None, help="Number of evolution time steps.")
+    parser.add_argument("--model.dropout", type=float, default=None, help="Dropout rate.")
+    parser.add_argument("--model.use_enhanced", action="store_true", help="Use enhanced TFN layers.")
+    parser.add_argument("--model.pos_min", type=float, default=None, help="Minimum position value.")
+    parser.add_argument("--model.pos_max", type=float, default=None, help="Maximum position value.")
+    
+    # New parameters for modular embeddings
+    parser.add_argument("--model.positional_embedding_strategy", type=str, default=None, 
+                       help="Positional embedding strategy: learned, time_based, sinusoidal.")
+    parser.add_argument("--model.calendar_features", nargs="+", default=None,
+                       help="Calendar features for time-based embeddings.")
+    parser.add_argument("--model.feature_cardinalities", type=str, default=None,
+                       help="JSON string of feature cardinalities for calendar features.")
+    
+    # Training parameters
+    parser.add_argument("--training.lr", type=float, default=None, help="Learning rate.")
+    parser.add_argument("--training.batch_size", type=int, default=None, help="Batch size.")
+    parser.add_argument("--training.epochs", type=int, default=None, help="Number of epochs.")
+    parser.add_argument("--training.weight_decay", type=float, default=None, help="Weight decay.")
+    parser.add_argument("--training.optimizer", type=str, default=None, help="Optimizer type.")
+    parser.add_argument("--training.warmup_epochs", type=int, default=None, help="Warmup epochs.")
+    parser.add_argument("--training.grad_clip", type=float, default=None, help="Gradient clipping.")
+    parser.add_argument("--training.log_interval", type=int, default=None, help="Logging interval.")
+    
+    # Data parameters
+    parser.add_argument("--data.dataset", type=str, default=None, help="Dataset name.")
+    parser.add_argument("--data.seq_len", type=int, default=None, help="Sequence length.")
+    parser.add_argument("--data.vocab_size", type=int, default=None, help="Vocabulary size.")
+    parser.add_argument("--data.pad_idx", type=int, default=None, help="Padding index.")
+    parser.add_argument("--data.dataset_size", type=int, default=None, help="Dataset size.")
+    parser.add_argument("--data.csv_path", type=str, default=None, help="CSV path for ETT data.")
+    parser.add_argument("--data.max_length", type=int, default=None, help="Max sequence length for NLP tokenization.")
+    parser.add_argument("--data.tokenizer_name", type=str, default=None, help="Tokenizer name for NLP datasets.")
+    
+    # New data parameters for normalization
+    parser.add_argument("--data.normalization_strategy", type=str, default=None,
+                       help="Normalization strategy: global, instance, feature_wise.")
+    parser.add_argument("--data.instance_normalize", action="store_true",
+                       help="Apply instance normalization in __getitem__.")
+    parser.add_argument("--data.input_len", type=int, default=None, help="Input window length for time series.")
+    parser.add_argument("--data.output_len", type=int, default=None, help="Output window length for time series.")
+    
+    # Legacy parameters for backward compatibility
+    parser.add_argument("--learning_rate", type=float, default=None, help="Learning rate (legacy).")
+    parser.add_argument("--batch_size", type=int, default=None, help="Batch size (legacy).")
+    parser.add_argument("--epochs", type=int, default=None, help="Number of epochs (legacy).")
+    parser.add_argument("--weight_decay", type=float, default=None, help="Weight decay (legacy).")
+    parser.add_argument("--optimizer", type=str, default=None, help="Optimizer type (legacy).")
+    parser.add_argument("--warmup_epochs", type=int, default=None, help="Warmup epochs (legacy).")
+    
+    # Enhanced model parameters (for future use)
     parser.add_argument("--model.kernel_hidden_dim", type=int, default=None, help="Hidden dimension for data-dependent kernel predictors.")
     parser.add_argument("--model.evolution_hidden_dim", type=int, default=None, help="Hidden dimension for evolution coefficient predictors.")
     parser.add_argument("--model.num_frequencies", type=int, default=None, help="Number of frequencies for multi-frequency Fourier kernel.")
     parser.add_argument("--model.min_dt", type=float, default=None, help="Minimum time step for adaptive time stepping.")
     parser.add_argument("--model.max_dt", type=float, default=None, help="Maximum time step for adaptive time stepping.")
-    # Additional data flags
-    parser.add_argument("--data.input_len", type=int, default=None, help="Input window length for time series.")
-    parser.add_argument("--data.output_len", type=int, default=None, help="Output window length for time series.")
-    parser.add_argument("--data.seq_len", type=int, default=None, help="Sequence length for synthetic data.")
-    parser.add_argument("--data.vocab_size", type=int, default=None, help="Vocabulary size for synthetic data.")
-    parser.add_argument("--data.pad_idx", type=int, default=None, help="Padding index for synthetic data.")
-    parser.add_argument("--data.dataset_size", type=int, default=None, help="Dataset size for synthetic data.")
-    parser.add_argument("--data.csv_path", type=str, default=None, help="CSV path for ETT data.")
-    parser.add_argument("--data.max_length", type=int, default=None, help="Max sequence length for NLP tokenization.")
-    parser.add_argument("--data.tokenizer_name", type=str, default=None, help="Tokenizer name for NLP datasets (e.g., 'bert-base-uncased', 'roberta-base').")
+    
     return parser.parse_args()
 
 # -----------------------------------------------------------------------------
