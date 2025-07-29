@@ -357,7 +357,7 @@ class HyperparameterSearch:
                 
                 except Exception as e:
                     print(f"  Trial failed: {str(e)}")
-                    # Log failed trial
+                    # Log failed trial with all required fields
                     failed_result = TrialResult(
                         trial_id=trial_id,
                         model_name=model_name,
@@ -371,10 +371,16 @@ class HyperparameterSearch:
                         best_epoch=0,
                         best_val_loss=float('inf'),
                         best_val_accuracy=0.0,
+                        best_val_mse=float('inf'),
+                        best_val_mae=float('inf'),
                         final_train_loss=0.0,
                         final_train_accuracy=0.0,
+                        final_train_mse=0.0,
+                        final_train_mae=0.0,
                         final_val_loss=0.0,
                         final_val_accuracy=0.0,
+                        final_val_mse=0.0,
+                        final_val_mae=0.0,
                         training_history=[]
                     )
                     self.logger.log_trial(failed_result)
@@ -512,31 +518,45 @@ class HyperparameterSearch:
         return trial.get_result()
     
     def _build_model(self, model_name: str, config: Dict[str, Any]) -> torch.nn.Module:
-        """Build model from registry using the same logic as train.py."""
+        """Build model with parameter validation."""
         model_info = registry.get_model_config(model_name)
         model_cls = model_info['class']
         task_type = model_info['task_type']
         model_args = dict(model_info.get('defaults', {}))
         
-        # Get model config from the config dictionary
-        model_cfg = config.get('model', {})
-        model_args.update(model_cfg)
+        # Update with config parameters
+        if 'model' in config:
+            model_args.update(config['model'])
         
         # Add data config parameters that might be needed by the model
-        data_cfg = config.get('data')
-        if data_cfg is not None:
-            # Pass output_len from data config to model if needed
+        if 'data' in config:
+            data_cfg = config['data']
             if 'output_len' in data_cfg and 'output_len' in model_info.get('required_params', []):
                 model_args['output_len'] = data_cfg['output_len']
         
         if 'task' in model_cls.__init__.__code__.co_varnames:
             model_args['task'] = task_type
-        allowed = set(model_info.get('required_params', []) + model_info.get('optional_params', []))
-        filtered_args = {k: v for k, v in model_args.items() if k in allowed or k == 'task'}
         
-        # Debug: Print what we're passing to the model
-        print(f"    Debug - Model class: {model_cls.__name__}")
-        print(f"    Debug - Model params: {filtered_args}")
+        # Get allowed parameters for this model
+        allowed = set(model_info.get('required_params', []) + model_info.get('optional_params', []))
+        allowed.add('task')  # Always allow task parameter
+        
+        # Filter arguments and warn about dropped parameters
+        filtered_args = {}
+        dropped_params = []
+        
+        for k, v in model_args.items():
+            if k in allowed:
+                filtered_args[k] = v
+            else:
+                dropped_params.append(k)
+        
+        # Warn about silently dropped parameters
+        if dropped_params:
+            print(f"    ⚠️  Warning: The following parameters were specified but are not supported by {model_name}:")
+            for param in dropped_params:
+                print(f"       - {param}: {model_args[param]}")
+            print(f"       These parameters will be ignored. Check the model registry for supported parameters.")
         
         return model_cls(**filtered_args)
 

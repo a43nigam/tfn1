@@ -123,8 +123,28 @@ def build_model(model_name: str, model_cfg: dict, data_cfg: dict = None) -> torc
     
     if 'task' in model_cls.__init__.__code__.co_varnames:
         model_args['task'] = task_type
+    
+    # Get allowed parameters for this model
     allowed = set(model_info.get('required_params', []) + model_info.get('optional_params', []))
-    filtered_args = {k: v for k, v in model_args.items() if k in allowed or k == 'task'}
+    allowed.add('task')  # Always allow task parameter
+    
+    # Filter arguments and warn about dropped parameters
+    filtered_args = {}
+    dropped_params = []
+    
+    for k, v in model_args.items():
+        if k in allowed:
+            filtered_args[k] = v
+        else:
+            dropped_params.append(k)
+    
+    # Warn about silently dropped parameters
+    if dropped_params:
+        print(f"⚠️  Warning: The following parameters were specified but are not supported by {model_name}:")
+        for param in dropped_params:
+            print(f"   - {param}: {model_args[param]}")
+        print(f"   These parameters will be ignored. Check the model registry for supported parameters.")
+    
     return model_cls(**filtered_args)
 
 def print_training_info(cfg: Dict[str, Any], model_name: str, model_info: Dict[str, Any], 

@@ -93,6 +93,7 @@ class TFN(nn.Module):
         num_layers: int = 2,
         kernel_type: str = "rbf",
         evolution_type: str = "cnn",
+        interference_type: str = "standard",
         grid_size: int = 100,
         time_steps: int = 3,
         dropout: float = 0.1,
@@ -154,6 +155,7 @@ class TFN(nn.Module):
                     grid_size=grid_size,
                     num_steps=time_steps,
                     dropout=dropout,
+                    interference_type=interference_type,
                 )
             else:
                 # TrainableTFNLayer parameters

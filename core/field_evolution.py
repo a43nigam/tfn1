@@ -738,12 +738,22 @@ def create_field_evolver(embed_dim: int,
         evolution_type: Type of evolution ("cnn", "pde", "diffusion", "wave", "schrodinger", 
                          "spatially_varying_pde", "modernized_cnn", "adaptive_time_stepping",
                          "dynamic", "adaptive", "causal")
-        propagator_type: If set, selects dynamic/adaptive/causal propagator
+        propagator_type: DEPRECATED - Use evolution_type instead. If set, selects dynamic/adaptive/causal propagator
         interference_type: Type of interference (for dynamic types)
         **kwargs: Additional arguments
     Returns:
         Configured field evolver or propagator
     """
+    # Deprecation warning for propagator_type
+    if propagator_type is not None:
+        import warnings
+        warnings.warn(
+            "propagator_type parameter is deprecated. Use evolution_type instead. "
+            "propagator_type will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+    
     if propagator_type == "dynamic" or evolution_type == "dynamic":
         return DynamicFieldPropagator(embed_dim, pos_dim, evolution_type=kwargs.get("evolution_type", "diffusion"), interference_type=interference_type, **kwargs)
     elif propagator_type == "adaptive" or evolution_type == "adaptive":
