@@ -277,27 +277,39 @@ class HyperparameterSearch:
     """Main hyperparameter search orchestrator."""
     
     def __init__(self, 
-                 models: List[str],
-                 param_sweep: Dict[str, List[Any]],
                  config: Dict[str, Any],
                  output_dir: str,
                  patience: int = 5,
                  min_epochs: int = 3,
                  seed: int = 42):
         """
-        Initialize hyperparameter search.
+        Initialize hyperparameter search from YAML config.
         
         Args:
-            models: List of model names to search
-            param_sweep: Dictionary mapping parameter names to lists of values
-            config: Base configuration for training
+            config: Complete configuration including search_space section
             output_dir: Directory to save results
             patience: Early stopping patience
             min_epochs: Minimum epochs before early stopping
             seed: Random seed for reproducibility
         """
-        self.models = models
-        self.param_sweep = param_sweep
+        # Extract search space from config
+        search_space_config = config.get("search_space")
+        if not search_space_config:
+            raise ValueError(
+                "Config file must contain a 'search_space' section for hyperparameter search.\n"
+                "See example configs/searches/ for reference."
+            )
+        
+        # Extract models and parameters
+        self.models = search_space_config.get("models", [config.get("model_name")])
+        if not self.models or self.models == [None]:
+            raise ValueError("No models specified in search_space.models or model_name")
+        
+        # Parse parameter sweep from config
+        param_config = search_space_config.get("params", {})
+        self.param_sweep = self._parse_param_config(param_config)
+        
+        # Store configuration
         self.config = config
         self.output_dir = output_dir
         self.patience = patience
@@ -309,19 +321,59 @@ class HyperparameterSearch:
         torch.manual_seed(seed)
         
         # Initialize components
-        self.search_space = SearchSpace(param_sweep)
+        self.search_space = SearchSpace(self.param_sweep)
         self.logger = ResultsLogger(output_dir)
         
         # Save search configuration
         search_config = {
-            "models": models,
-            "param_sweep": param_sweep,
+            "models": self.models,
+            "param_sweep": self.param_sweep,
+            "search_space_config": search_space_config,
             "patience": patience,
             "min_epochs": min_epochs,
             "seed": seed,
-            "total_trials": len(models) * len(self.search_space)
+            "total_trials": len(self.models) * len(self.search_space)
         }
         self.logger.save_search_config(search_config)
+    
+    def _parse_param_config(self, param_config: Dict[str, Any]) -> Dict[str, List[Any]]:
+        """Parse parameter configuration from YAML into sweep format."""
+        param_sweep = {}
+        
+        for param_name, param_def in param_config.items():
+            if isinstance(param_def, dict):
+                if "values" in param_def:
+                    # Direct value list: model.embed_dim: {values: [128, 256, 512]}
+                    param_sweep[param_name] = param_def["values"]
+                elif "range" in param_def:
+                    # Range specification: training.lr: {range: [0.0001, 0.01], steps: 5}
+                    start, end = param_def["range"]
+                    steps = param_def.get("steps", 3)
+                    if param_def.get("log_scale", False):
+                        import numpy as np
+                        param_sweep[param_name] = np.logspace(
+                            np.log10(start), np.log10(end), steps
+                        ).tolist()
+                    else:
+                        import numpy as np
+                        param_sweep[param_name] = np.linspace(start, end, steps).tolist()
+                elif "logspace" in param_def:
+                    # Logarithmic range: training.lr: {logspace: [0.0001, 0.01], steps: 5}
+                    start, end = param_def["logspace"]
+                    steps = param_def.get("steps", 3)
+                    import numpy as np
+                    param_sweep[param_name] = np.logspace(
+                        np.log10(start), np.log10(end), steps
+                    ).tolist()
+                else:
+                    raise ValueError(f"Unknown parameter definition for {param_name}: {param_def}")
+            elif isinstance(param_def, list):
+                # Direct list: model.kernel_type: [rbf, compact, fourier]
+                param_sweep[param_name] = param_def
+            else:
+                raise ValueError(f"Invalid parameter definition for {param_name}: {param_def}")
+        
+        return param_sweep
     
     def run_search(self) -> None:
         """Run the complete hyperparameter search."""
@@ -467,12 +519,18 @@ class HyperparameterSearch:
         
         weight_decay = training_config.get('weight_decay', 0.0)
         
+        # Create strategy for this trial
+        from train import create_task_strategy
+        model_info = registry.get_model_config(model_name)
+        task_type = model_info['task_type']
+        strategy = create_task_strategy(task_type, trial_config)
+
         trainer = Trainer(
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
             test_loader=test_loader,
-            task=trial_config.get('task', 'classification'),
+            strategy=strategy,  # Use strategy instead of task string
             device=training_config.get('device', 'cpu'),
             lr=lr,
             weight_decay=weight_decay,
@@ -557,166 +615,151 @@ class HyperparameterSearch:
         return build_model(model_name, config.get('model', {}), config.get('data', {}))
 
 
-def parse_param_sweep(param_sweep_str: str) -> Dict[str, List[Any]]:
-    """Parse parameter sweep string into dictionary."""
-    param_sweep = {}
-    
-    for param_str in param_sweep_str.split():
-        if ':' not in param_str:
-            continue
-        
-        # Split on the last colon to handle nested parameter names
-        parts = param_str.split(':')
-        if len(parts) < 2:
-            continue
-            
-        # Handle nested parameter names (e.g., "evolution:type" -> "evolution_type")
-        if len(parts) > 2:
-            param_name = '_'.join(parts[:-1])  # Join all parts except the last as parameter name
-            values_str = parts[-1]  # Last part contains the values
-        else:
-            param_name, values_str = parts
-        
-        values = []
-        
-        for value_str in values_str.split(','):
-            value_str = value_str.strip()
-            
-            # Try to convert to appropriate type
-            try:
-                # Handle scientific notation (e.g., 1e-3)
-                if 'e' in value_str.lower():
-                    values.append(float(value_str))
-                elif '.' in value_str:
-                    values.append(float(value_str))
-                else:
-                    values.append(int(value_str))
-            except ValueError:
-                # Keep as string
-                values.append(value_str)
-        
-        param_sweep[param_name] = values
-    
-    return param_sweep
-
 
 def update_config_with_args(config: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
-    """Update config with command line arguments using the same logic as train.py."""
-    # Special mappings for CLI arguments that don't follow dot notation
-    special_mappings = {
-        "learning_rate": "training.lr",
-        "batch_size": "training.batch_size", 
-        "epochs": "training.epochs",
-        "weight_decay": "training.weight_decay",
-        "optimizer": "training.optimizer",
-        "warmup_epochs": "training.warmup_epochs",
+    """Update config with command line arguments using generic override system."""
+    
+    # Handle direct convenience arguments
+    convenience_mappings = {
+        'output_dir': 'output_dir',
+        'device': 'training.device',
+        'seed': 'seed'
     }
     
-    for arg_key, arg_val in vars(args).items():
-        if arg_key == "config" or arg_val is None:
-            continue
-            
-        # Handle special mappings
-        if arg_key in special_mappings:
-            config_key = special_mappings[arg_key]
-        else:
-            config_key = arg_key
-            
-        keys = config_key.split(".")
-        d = config
-        for k in keys[:-1]:
-            if k not in d or not isinstance(d[k], dict):
-                d[k] = {}
-            d = d[k]
-        d[keys[-1]] = arg_val
+    for arg_name, config_path in convenience_mappings.items():
+        arg_value = getattr(args, arg_name, None)
+        if arg_value is not None:
+            _set_nested_config_value(config, config_path, arg_value)
+    
+    # Handle generic --set overrides
+    for override in getattr(args, 'set', []):
+        try:
+            key, value = override.split('=', 1)
+        except ValueError:
+            raise ValueError(f"Invalid override format: '{override}'. Expected 'key=value'")
+        
+        # Smart type casting
+        typed_value = _cast_config_value(value)
+        _set_nested_config_value(config, key, typed_value)
+    
     return config
+
+
+def _set_nested_config_value(config: Dict[str, Any], key_path: str, value: Any) -> None:
+    """Set a nested configuration value using dot notation."""
+    keys = key_path.split('.')
+    d = config
+    
+    # Navigate to nested dictionary, creating as needed
+    for k in keys[:-1]:
+        if k not in d or not isinstance(d.get(k), dict):
+            d[k] = {}
+        d = d[k]
+    
+    # Set the final value
+    d[keys[-1]] = value
+
+
+def _cast_config_value(value: str) -> Any:
+    """Intelligently cast string values to appropriate types."""
+    # Strip whitespace
+    value = value.strip()
+    
+    # Handle boolean strings
+    if value.lower() in ('true', 'yes', 'on', '1'):
+        return True
+    elif value.lower() in ('false', 'no', 'off', '0'):
+        return False
+    
+    # Handle None/null
+    if value.lower() in ('none', 'null', ''):
+        return None
+    
+    # Handle numbers
+    try:
+        # Scientific notation or decimal
+        if 'e' in value.lower() or '.' in value:
+            return float(value)
+        else:
+            return int(value)
+    except ValueError:
+        pass
+    
+    # Handle lists (comma-separated)
+    if ',' in value:
+        items = [_cast_config_value(item.strip()) for item in value.split(',')]
+        return items
+    
+    # Keep as string
+    return value
 
 
 def main():
     parser = argparse.ArgumentParser(description="Hyperparameter search for TFN models")
-    parser.add_argument("--config", type=str, default="configs/tests/synthetic_copy_test.yaml", 
-                       help="Path to YAML config file")
-    parser.add_argument("--models", nargs='+', 
-                       default=["tfn_classifier", "enhanced_tfn_classifier"],
-                       help="Models to search")
-    parser.add_argument("--param_sweep", type=str, 
-                       default="embed_dim:128,256 num_layers:2,4 kernel_type:rbf,compact learning_rate:1e-3,1e-4",
-                       help="Parameter sweep specification")
+    parser.add_argument("--config", type=str, required=True,
+                       help="Path to YAML config file with 'search_space' section")
     parser.add_argument("--output_dir", type=str, default=None,
-                       help="Output directory for results")
+                       help="Output directory for results (overrides YAML)")
     parser.add_argument("--device", type=str, default=None,
-                       help="Device to use (cuda, cpu, auto). Default: auto-detect.")
-    parser.add_argument("--patience", type=int, default=5,
-                       help="Early stopping patience")
-    parser.add_argument("--min_epochs", type=int, default=3,
-                       help="Minimum epochs before early stopping")
-    parser.add_argument("--epochs", type=int, default=20,
-                       help="Maximum training epochs")
-    parser.add_argument("--warmup_epochs", type=int, default=None,
-                       help="Number of warmup epochs for learning rate scheduling")
-    parser.add_argument("--weight_decay", type=float, default=0.0,
-                       help="Weight decay for optimizer")
-    parser.add_argument("--seed", type=int, default=42,
-                       help="Random seed")
-    parser.add_argument("--track_flops", action="store_true",
-                       help="Enable FLOPS tracking during training")
+                       help="Device to use: cuda | cpu | auto (overrides YAML)")
+    parser.add_argument("--seed", type=int, default=None,
+                       help="Random seed (overrides YAML)")
+    
+    # Generic override system (same as train.py)
+    parser.add_argument("--set", nargs='+', default=[],
+                       help="Override config parameters with key=value pairs")
     
     args = parser.parse_args()
     
-    # Handle Kaggle environment - use writable directory
-    if args.output_dir is None:
-        # Check if we're in Kaggle environment
-        if os.path.exists('/kaggle/working'):
-            args.output_dir = '/kaggle/working/search_results'
-        else:
-            args.output_dir = './search_results'
-    
-    # Load base config
+    # Load configuration
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
     
-    # Update config with CLI args
+    # Apply overrides using same logic as train.py
     config = update_config_with_args(config, args)
     
-    # Device detection with --device flag support
-    if args.device is not None:
-        if args.device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        else:
-            device = args.device
-    else:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Handle special arguments
+    if args.output_dir:
+        config['output_dir'] = args.output_dir
+    if args.seed:
+        config['seed'] = args.seed
     
-    # Set device in config
-    if "training" not in config:
-        config["training"] = {}
-    config["training"]["device"] = device
+    # Set defaults
+    output_dir = config.get('output_dir', './search_results')
     
-    print(f"🔧 Using device: {device}")
+    # Handle Kaggle environment
+    if os.path.exists('/kaggle/working') and not os.access(output_dir, os.W_OK):
+        output_dir = '/kaggle/working/search_results'
+        print(f"Warning: Using Kaggle working directory: {output_dir}")
+    
+    print(f"🔧 Hyperparameter Search Configuration:")
+    print(f"   Config file: {args.config}")
+    print(f"   Output directory: {output_dir}")
+    
+    # Device handling
+    device = config.get('training', {}).get('device', 'auto')
+    if device == 'auto':
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    if 'training' not in config:
+        config['training'] = {}
+    config['training']['device'] = device
+    
+    print(f"   Device: {device}")
     if device == "cuda" and torch.cuda.is_available():
         try:
             print(f"   GPU: {torch.cuda.get_device_name()}")
             print(f"   Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
         except Exception as e:
             print(f"   GPU info unavailable: {e}")
-    elif device == "cuda" and not torch.cuda.is_available():
-        print("   ⚠️  CUDA requested but not available - falling back to CPU")
-        device = "cpu"
-        config["training"]["device"] = device
-        print(f"   Using CPU instead")
-    
-    # Parse parameter sweep
-    param_sweep = parse_param_sweep(args.param_sweep)
     
     # Create and run search
     search = HyperparameterSearch(
-        models=args.models,
-        param_sweep=param_sweep,
         config=config,
-        output_dir=args.output_dir,
-        patience=args.patience,
-        min_epochs=args.min_epochs,
-        seed=args.seed
+        output_dir=output_dir,
+        patience=config.get('patience', 5),
+        min_epochs=config.get('min_epochs', 3),
+        seed=config.get('seed', 42)
     )
     
     search.run_search()

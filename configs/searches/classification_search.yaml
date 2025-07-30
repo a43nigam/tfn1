@@ -1,0 +1,60 @@
+# Text Classification Hyperparameter Search
+# For sentiment analysis and other text classification tasks
+
+model_name: "enhanced_tfn_classifier"
+
+# Static configuration (applied to all trials)
+data:
+  dataset_name: "imdb"
+  max_length: 512
+  tokenizer_name: "bert-base-uncased"
+
+training:
+  epochs: 20
+  patience: 3
+  batch_size: 32
+  warmup_epochs: 1
+  grad_clip: 1.0
+
+# Hyperparameter search space definition
+search_space:
+  # Models to search over
+  models: ["enhanced_tfn_classifier", "tfn_classifier"]
+  
+  # Parameter sweep definitions
+  params:
+    # Model architecture parameters
+    model.embed_dim:
+      values: [256, 512, 768]
+    
+    model.num_layers:
+      # Range from 2 to 8 with 4 steps: [2, 4, 6, 8]
+      range: [2, 8]
+      steps: 4
+    
+    model.kernel_type:
+      values: ["rbf", "compact", "film_learnable"]
+    
+    model.evolution_type:
+      values: ["cnn", "diffusion"]
+    
+    model.dropout:
+      values: [0.1, 0.2, 0.3]
+    
+    model.grid_size:
+      values: [128, 256]
+    
+    # Training parameters
+    training.lr:
+      # Logarithmic space from 0.00005 to 0.005 with 6 steps
+      logspace: [0.00005, 0.005]
+      steps: 6
+    
+    training.weight_decay:
+      values: [0.0, 0.001, 0.01]
+
+# Search configuration
+patience: 3
+min_epochs: 2
+seed: 42
+output_dir: "./search_results/classification" 
