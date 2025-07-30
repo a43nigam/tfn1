@@ -7,19 +7,9 @@ parameters, evolution types, and compatibility information.
 
 from typing import Dict, List, Any, Optional
 # Legacy classifier/regressor aliases were removed; map to core TFN
-from .tfn_unified import TFN as TFNClassifier, TFN as TFNRegressor, UnifiedTFN as _Alias
-# Placeholder enhanced alias (points to core TFN or future enhanced)
-EnhancedTFNClassifier = TFNClassifier
-
-# Time-series regressors map to the same TFN for now (kept for registry compatibility)
-# TFNTimeSeriesRegressor = TFNRegressor
-# TFNMultiStepRegressor = TFNRegressor
-# TFNSequenceRegressor = TFNRegressor
-# Time-series regressors can still map to UnifiedTFN if needed; keep imports minimal
-# Deprecated/legacy 2-D implementation replaced by ImageTFN but registry keeps entry for compat
-# Enhanced TFN model
+from .tfn_unified import TFN, UnifiedTFN
 from .tfn_enhanced import EnhancedTFNModel, EnhancedTFNRegressor
-from .tfn_pytorch import ImageTFN as TFNClassifier2D  # alias for 2D image model
+from .tfn_pytorch import ImageTFN
 from .baselines import TransformerBaseline, PerformerBaseline, LSTMBaseline, CNNBaseline
 from .seq_baselines import TFNSeqModel, SimpleTransformerSeqModel, SimplePerformerSeqModel
 
@@ -30,7 +20,7 @@ MODEL_REGISTRY = {
     # ============================================================================
     
     'tfn_classifier': {
-        'class': TFNClassifier,
+        'class': TFN,
         'task_type': 'classification',
         'evolution_types': ['cnn', 'pde'],
         'components': ['field_projection', 'field_evolution', 'field_sampling'],
@@ -52,7 +42,7 @@ MODEL_REGISTRY = {
     },
     
     'tfn_regressor': {
-        'class': TFNRegressor,
+        'class': TFN,
         'task_type': 'regression',
         'evolution_types': ['cnn', 'pde'],
         'components': ['field_projection', 'field_evolution', 'field_sampling'],
@@ -90,7 +80,7 @@ MODEL_REGISTRY = {
     },
     
     'tfn_vision': {
-        'class': TFNClassifier2D,
+        'class': ImageTFN,
         'task_type': 'vision',
         'evolution_types': ['cnn', 'pde'],  # 2D uses different evolution
         'components': ['field_projection', 'field_evolution', 'field_sampling'],
