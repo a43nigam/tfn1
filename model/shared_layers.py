@@ -49,7 +49,13 @@ class LearnedPositionalEmbeddings(PositionalEmbeddingStrategy):
 
     def forward(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:  # [L, D]
         seq_len = positions.shape[1] if positions.dim() > 1 else positions.shape[0]
-        idx = torch.arange(seq_len, device=self.pos.weight.device)
+        idx = torch.arange(seq_len, device=positions.device)
+        
+        # Ensure the embedding layer is on the same device as the input tensor
+        # This handles cases where the model is moved to CUDA after initialization
+        if self.pos.weight.device != positions.device:
+            self.pos = self.pos.to(positions.device)
+        
         return self.pos(idx)
 
     def __call__(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -162,6 +168,10 @@ class TimeBasedEmbeddings(PositionalEmbeddingStrategy):
                 cardinality = self.feature_cardinalities[feature]
                 feature_values = torch.clamp(feature_values, 0, cardinality - 1)
                 
+                # Ensure the embedding layer is on the same device as the input
+                if self.feature_embeddings[feature].weight.device != positions.device:
+                    self.feature_embeddings[feature] = self.feature_embeddings[feature].to(positions.device)
+                
                 # Get embeddings for this feature
                 feature_emb = self.feature_embeddings[feature](feature_values)  # [B, N, embed_dim_per_feature]
                 embeddings.append(feature_emb)
@@ -177,6 +187,9 @@ class TimeBasedEmbeddings(PositionalEmbeddingStrategy):
         
         # Apply projection if needed
         if self.projection is not None:
+            # Ensure the projection layer is on the same device as the input
+            if self.projection.weight.device != positions.device:
+                self.projection = self.projection.to(positions.device)
             combined_embeddings = self.projection(combined_embeddings)
         
         # Remove batch dimension if input didn't have one
@@ -228,7 +241,7 @@ class SinusoidalEmbeddings(PositionalEmbeddingStrategy):
     def forward(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:
         """Forward pass for sinusoidal embeddings."""
         seq_len = positions.shape[1] if positions.dim() > 1 else positions.shape[0]
-        return self.pe[:seq_len]
+        return self.pe[:seq_len].to(positions.device)
 
     def __call__(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:
         """Make the object callable."""

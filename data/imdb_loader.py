@@ -77,9 +77,9 @@ class IMDBDataset(Dataset):
         tokenizer_name: str = 'bert-base-uncased',
         max_length: int = 256,
         split_frac: Optional[Dict[str, float]] = None,
-        text_col: str = 'review',
-        label_col: str = 'sentiment',
-        regression_col: str = 'sentiment',
+        text_col: str = 'Overview',
+        label_col: str = 'Genre',
+        regression_col: str = 'IMDB_Rating',
         task: str = 'classification',
         split_seed: int = 42,
     ) -> Tuple['IMDBDataset', 'IMDBDataset', 'IMDBDataset']:

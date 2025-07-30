@@ -1,3 +1,5 @@
+model_name: tfn_language_model
+
 data:
   dataset_name: "wikitext"
   wikitext_dataset_name: "wikitext-2-raw-v1"  # or "wikitext-103-raw-v1" for larger dataset
@@ -8,11 +10,10 @@ data:
 model:
   vocab_size: 50257  # GPT-2 vocabulary size
   embed_dim: 256
-  num_layers: 4
   grid_size: 256
   kernel_type: "rbf"
-  evolution_type: "diffusion"
-
+  evolution_type: "pde"
+  time_steps: 3
   dropout: 0.1
 
 training:

@@ -7,6 +7,8 @@ from data_pipeline import get_dataloader
 from model import registry
 from src.trainer import Trainer
 from src import metrics
+from model.utils import build_model as shared_build_model  # centralised builder
+from src.task_strategies import TaskStrategy, ClassificationStrategy, RegressionStrategy, LanguageModelingStrategy
 from typing import Any, Dict
 
 # -----------------------------------------------------------------------------
@@ -71,6 +73,14 @@ def parse_args() -> argparse.Namespace:
                        help="Apply instance normalization in __getitem__.")
     parser.add_argument("--data.input_len", type=int, default=None, help="Input window length for time series.")
     parser.add_argument("--data.output_len", type=int, default=None, help="Output window length for time series.")
+
+    # ------------------------------------------------------------------
+    # New CLI convenience flags
+    # ------------------------------------------------------------------
+    parser.add_argument("--model_name", type=str, default=None,
+                       help="Model name as registered in model/registry.py (overrides YAML)")
+    parser.add_argument("--device", type=str, default=None,
+                       help="Device to use: cuda | cpu | auto (default auto-detect)")
     
     # Legacy parameters for backward compatibility
     parser.add_argument("--learning_rate", type=float, default=None, help="Learning rate (legacy).")
@@ -128,43 +138,19 @@ def update_config_with_args(config: Dict[str, Any], args: argparse.Namespace) ->
 # -----------------------------------------------------------------------------
 
 def build_model(model_name: str, model_cfg: dict, data_cfg: dict = None) -> torch.nn.Module:
-    model_info = registry.get_model_config(model_name)
-    model_cls = model_info['class']
-    task_type = model_info['task_type']
-    model_args = dict(model_info.get('defaults', {}))
-    model_args.update(model_cfg)
-    
-    # Add data config parameters that might be needed by the model
-    if data_cfg is not None:
-        # Pass output_len from data config to model if needed
-        if 'output_len' in data_cfg and 'output_len' in model_info.get('required_params', []):
-            model_args['output_len'] = data_cfg['output_len']
-    
-    if 'task' in model_cls.__init__.__code__.co_varnames:
-        model_args['task'] = task_type
-    
-    # Get allowed parameters for this model
-    allowed = set(model_info.get('required_params', []) + model_info.get('optional_params', []))
-    allowed.add('task')  # Always allow task parameter
-    
-    # Filter arguments and warn about dropped parameters
-    filtered_args = {}
-    dropped_params = []
-    
-    for k, v in model_args.items():
-        if k in allowed:
-            filtered_args[k] = v
-        else:
-            dropped_params.append(k)
-    
-    # Warn about silently dropped parameters
-    if dropped_params:
-        print(f"⚠️  Warning: The following parameters were specified but are not supported by {model_name}:")
-        for param in dropped_params:
-            print(f"   - {param}: {model_args[param]}")
-        print(f"   These parameters will be ignored. Check the model registry for supported parameters.")
-    
-    return model_cls(**filtered_args)
+    """Thin wrapper around the centralised shared_build_model utility."""
+    return shared_build_model(model_name, model_cfg, data_cfg)
+
+def create_task_strategy(task_type: str, config: Dict[str, Any]) -> TaskStrategy:
+    """Factory function to create the appropriate task strategy."""
+    if task_type == "classification" or task_type == "ner":
+        return ClassificationStrategy()
+    elif task_type in ("regression", "time_series"):
+        return RegressionStrategy()
+    elif task_type == "language_modeling":
+        return LanguageModelingStrategy()
+    else:
+        raise ValueError(f"No strategy available for task type: {task_type}")
 
 def print_training_info(cfg: Dict[str, Any], model_name: str, model_info: Dict[str, Any], 
                        model: torch.nn.Module, device: torch.device, train_cfg: Dict[str, Any]) -> None:
@@ -271,6 +257,13 @@ def main() -> None:
     model_cfg = cfg["model"]
     train_cfg = cfg["training"]
 
+    # ------------------------------------------------------------------
+    # Auto-fill model config with dataset-dependent attributes
+    # ------------------------------------------------------------------
+    for attr in ("vocab_size", "input_dim", "num_classes"):
+        if hasattr(train_ds, attr) and attr not in model_cfg:
+            model_cfg[attr] = getattr(train_ds, attr)
+
     if model_name.startswith("tfn") and "pg19" in cfg["data"]["dataset_name"]:
         from data.pg19_loader import PG19Dataset
         file_path = cfg["data"]["file_path"]
@@ -285,6 +278,11 @@ def main() -> None:
     model_info = registry.get_model_config(model_name)
     task_type = model_info['task_type']
 
+    # --- KEY CHANGES START HERE ---
+    
+    # 1. Create the strategy object using the new factory
+    strategy = create_task_strategy(task_type, cfg)
+
     # Print comprehensive training information
     print_training_info(cfg, model_name, model_info, model, device, train_cfg)
 
@@ -295,11 +293,12 @@ def main() -> None:
         except ValueError:
             raise ValueError(f"Invalid learning rate value: {lr_value!r}")
 
+    # 2. Inject the strategy object into the Trainer
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        task=task_type,
+        strategy=strategy,  # CHANGED from task=task_type
         device=device,
         lr=lr_value,
         weight_decay=train_cfg.get("weight_decay", 0.0),

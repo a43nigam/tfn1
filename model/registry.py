@@ -35,7 +35,10 @@ MODEL_REGISTRY = {
         'evolution_types': ['cnn', 'pde'],
         'components': ['field_projection', 'field_evolution', 'field_sampling'],
         'required_params': ['vocab_size', 'embed_dim', 'num_classes', 'kernel_type', 'evolution_type'],
-        'optional_params': ['num_layers', 'grid_size', 'time_steps', 'dropout', 'use_enhanced', 'interference_type'],
+        'optional_params': [
+            'num_layers', 'grid_size', 'time_steps', 'dropout', 'use_enhanced', 'interference_type',
+            'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities', 'max_seq_len'
+        ],
         'defaults': {
             'num_layers': 2,
             'kernel_type': 'rbf',
@@ -73,7 +76,9 @@ MODEL_REGISTRY = {
         'evolution_types': ['cnn', 'pde'],
         'components': ['field_projection', 'field_evolution', 'field_sampling'],
         'required_params': ['vocab_size', 'embed_dim', 'kernel_type', 'evolution_type'],
-        'optional_params': ['seq_len', 'grid_size', 'time_steps', 'dropout'],
+        'optional_params': [
+            'seq_len', 'grid_size', 'time_steps', 'dropout'
+        ],
         'defaults': {
             'seq_len': 512,
             'grid_size': 256,
@@ -123,7 +128,10 @@ MODEL_REGISTRY = {
         'evolution_types': ['diffusion', 'wave', 'schrodinger', 'cnn'],
         'components': ['field_projection', 'field_interference', 'field_evolution', 'field_sampling'],
         'required_params': ['vocab_size', 'embed_dim', 'kernel_type', 'interference_type'],
-        'optional_params': ['num_layers', 'evolution_type', 'grid_size', 'num_heads', 'dropout'],
+        'optional_params': [
+            'num_layers', 'evolution_type', 'grid_size', 'num_heads', 'dropout',
+            'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities', 'max_seq_len'
+        ],
         'physics_params': ['use_physics_constraints', 'constraint_weight'],
         'defaults': {
             'num_layers': 2,
@@ -144,7 +152,10 @@ MODEL_REGISTRY = {
         'evolution_types': ['diffusion', 'wave', 'schrodinger', 'cnn', 'spatially_varying_pde', 'modernized_cnn'],
         'components': ['field_projection', 'field_interference', 'field_evolution', 'field_sampling'],
         'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len', 'kernel_type', 'interference_type'],
-        'optional_params': ['num_layers', 'evolution_type', 'grid_size', 'num_heads', 'dropout'],
+        'optional_params': [
+            'num_layers', 'evolution_type', 'grid_size', 'num_heads', 'dropout',
+            'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities', 'max_seq_len'
+        ],
         'physics_params': ['use_physics_constraints', 'constraint_weight'],
         'defaults': {
             'num_layers': 1,
@@ -165,7 +176,10 @@ MODEL_REGISTRY = {
         'evolution_types': ['diffusion', 'wave', 'schrodinger', 'cnn'],
         'components': ['field_projection', 'field_interference', 'field_evolution', 'field_sampling'],
         'required_params': ['vocab_size', 'embed_dim', 'num_layers', 'kernel_type', 'interference_type'],
-        'optional_params': ['pos_dim', 'evolution_type', 'grid_size', 'num_heads', 'dropout', 'max_seq_len'],
+        'optional_params': [
+            'pos_dim', 'evolution_type', 'grid_size', 'num_heads', 'dropout', 'max_seq_len',
+            'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities'
+        ],
         'physics_params': ['use_physics_constraints', 'constraint_weight'],
         'defaults': {
             'pos_dim': 1,

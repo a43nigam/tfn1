@@ -286,6 +286,7 @@ class TrainableTFNLayer(nn.Module):
         # Create grid points
         if use_learnable_grid:
             grid_points = torch.clamp(self.learnable_grid, 0, 1)
+            grid_points = grid_points.to(embeddings.device)
             grid_points = grid_points.unsqueeze(0).unsqueeze(-1).expand(B, -1, P)
         else:
             grid_points = torch.linspace(0, 1, self.grid_size, device=embeddings.device, dtype=embeddings.dtype)

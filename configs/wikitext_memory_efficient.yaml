@@ -1,3 +1,5 @@
+model_name: tfn_language_model
+
 data:
   dataset_name: "wikitext"
   wikitext_dataset_name: "wikitext-2-raw-v1"  # Use smaller dataset
@@ -9,14 +11,11 @@ data:
 model:
   vocab_size: 50257
   embed_dim: 64   # Reduced from 128
-  num_layers: 1   # Reduced from 2
   grid_size: 64   # Reduced from 128
   kernel_type: "rbf"
-  evolution_type: "diffusion"
-  interference_type: "standard"  # Required parameter for enhanced TFN
+  evolution_type: "pde"
+  time_steps: 3
   dropout: 0.1
-  num_heads: 4    # Reduced from 8
-  max_seq_len: 128  # Match data max_length
 
 training:
   batch_size: 4   # Reduced from 8

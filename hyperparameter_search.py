@@ -29,6 +29,7 @@ from data_pipeline import get_dataloader
 from model import registry
 from src.trainer import Trainer
 from src import metrics
+from model.utils import build_model  # centralised model builder
 
 
 @dataclass
@@ -398,11 +399,35 @@ class HyperparameterSearch:
         # Update config with trial parameters
         trial_config = self.config.copy()
         
+        # Separate model parameters from training parameters
+        model_params = {}
+        training_params = {}
+        
+        # Define which parameters belong to which section
+        training_param_names = {
+            'learning_rate', 'lr', 'weight_decay', 'epochs', 'batch_size', 
+            'optimizer', 'warmup_epochs', 'grad_clip', 'log_interval'
+        }
+        
+        for param_name, param_value in parameters.items():
+            if param_name in training_param_names:
+                training_params[param_name] = param_value
+            else:
+                model_params[param_name] = param_value
+        # Normalise alias names so Trainer sees the right keys
+        if 'learning_rate' in training_params:
+            training_params['lr'] = training_params.pop('learning_rate')
+        
         # Update model parameters in the model section
         if 'model' not in trial_config:
             trial_config['model'] = {}
-        trial_config['model'].update(parameters)
+        trial_config['model'].update(model_params)
         trial_config['model_name'] = model_name
+        
+        # Update training parameters in the training section
+        if 'training' not in trial_config:
+            trial_config['training'] = {}
+        trial_config['training'].update(training_params)
         
         # Set random seed for this trial
         trial_seed = self.seed + hash(trial_id) % 10000
@@ -432,19 +457,29 @@ class HyperparameterSearch:
                 break
         
         # Create trainer
+        training_config = trial_config.get('training', {})
+        
+        # Handle learning rate: if learning_rate is swept, it should override lr
+        if 'learning_rate' in training_config:
+            lr = training_config['learning_rate']
+        else:
+            lr = training_config.get('lr', 1e-3)
+        
+        weight_decay = training_config.get('weight_decay', 0.0)
+        
         trainer = Trainer(
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
             test_loader=test_loader,
             task=trial_config.get('task', 'classification'),
-            device=trial_config.get('training', {}).get('device', 'cpu'),
-            lr=trial_config.get('learning_rate', 1e-3),
-            weight_decay=trial_config.get('weight_decay', 0.0),
-            epochs=trial_config.get('epochs', 10),
-            grad_clip=trial_config.get('grad_clip', 1.0),
-            log_interval=trial_config.get('log_interval', 100),
-            warmup_epochs=trial_config.get('warmup_epochs', 2),
+            device=training_config.get('device', 'cpu'),
+            lr=lr,
+            weight_decay=weight_decay,
+            epochs=training_config.get('epochs', 10),
+            grad_clip=training_config.get('grad_clip', 1.0),
+            log_interval=training_config.get('log_interval', 100),
+            warmup_epochs=training_config.get('warmup_epochs', 2),
             track_flops=True  # Enable FLOPs tracking for hyperparameter search
         )
         
@@ -518,47 +553,8 @@ class HyperparameterSearch:
         return trial.get_result()
     
     def _build_model(self, model_name: str, config: Dict[str, Any]) -> torch.nn.Module:
-        """Build model with parameter validation."""
-        model_info = registry.get_model_config(model_name)
-        model_cls = model_info['class']
-        task_type = model_info['task_type']
-        model_args = dict(model_info.get('defaults', {}))
-        
-        # Update with config parameters
-        if 'model' in config:
-            model_args.update(config['model'])
-        
-        # Add data config parameters that might be needed by the model
-        if 'data' in config:
-            data_cfg = config['data']
-            if 'output_len' in data_cfg and 'output_len' in model_info.get('required_params', []):
-                model_args['output_len'] = data_cfg['output_len']
-        
-        if 'task' in model_cls.__init__.__code__.co_varnames:
-            model_args['task'] = task_type
-        
-        # Get allowed parameters for this model
-        allowed = set(model_info.get('required_params', []) + model_info.get('optional_params', []))
-        allowed.add('task')  # Always allow task parameter
-        
-        # Filter arguments and warn about dropped parameters
-        filtered_args = {}
-        dropped_params = []
-        
-        for k, v in model_args.items():
-            if k in allowed:
-                filtered_args[k] = v
-            else:
-                dropped_params.append(k)
-        
-        # Warn about silently dropped parameters
-        if dropped_params:
-            print(f"    ⚠️  Warning: The following parameters were specified but are not supported by {model_name}:")
-            for param in dropped_params:
-                print(f"       - {param}: {model_args[param]}")
-            print(f"       These parameters will be ignored. Check the model registry for supported parameters.")
-        
-        return model_cls(**filtered_args)
+        """Wrapper that delegates to model.utils.build_model (DRY)."""
+        return build_model(model_name, config.get('model', {}), config.get('data', {}))
 
 
 def parse_param_sweep(param_sweep_str: str) -> Dict[str, List[Any]]:

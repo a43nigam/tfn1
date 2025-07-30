@@ -9,7 +9,7 @@ field interference approach.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 import math
 
 from core.field_projection import FieldProjector
@@ -18,6 +18,7 @@ from core.field_sampling import FieldSampler
 from core.field_interference import TokenFieldInterference, create_field_interference
 from core.interaction_operators import FieldInteractionOperators, create_interaction_operators
 from core.unified_field_dynamics import UnifiedFieldDynamics
+from model.shared_layers import create_positional_embedding_strategy  # NEW
 
 
 class EnhancedTFNLayer(nn.Module):
@@ -25,7 +26,8 @@ class EnhancedTFNLayer(nn.Module):
     Enhanced TFN Layer using Unified Field Dynamics.
     Integrates field projection, unified field dynamics (evolution + interference + constraints), and field sampling.
     """
-    def __init__(self, 
+    def __init__(
+                 self,
                  embed_dim: int,
                  pos_dim: int = 1,
                  kernel_type: str = "rbf",
@@ -36,9 +38,17 @@ class EnhancedTFNLayer(nn.Module):
                  dt: float = 0.01,
                  dropout: float = 0.1,
                  *,
+                 # Physics
                  use_physics_constraints: bool = False,
                  constraint_weight: float = 0.1,
-                 layer_norm_eps: float = 1e-5):
+                 # Modular positional embeddings
+                 positional_embedding_strategy: str = "learned",
+                 calendar_features: Optional[list[str]] = None,
+                 feature_cardinalities: Optional[dict[str, int]] = None,
+                 max_seq_len: int = 512,
+                 # Misc
+                 layer_norm_eps: float = 1e-5,
+                 **kwargs):
         super().__init__()
         self.embed_dim = embed_dim
         self.pos_dim = pos_dim
@@ -70,8 +80,14 @@ class EnhancedTFNLayer(nn.Module):
         self.output_proj = nn.Linear(embed_dim, embed_dim)
         self.dropout = nn.Dropout(dropout)
         
-        # Position embeddings (for compatibility with Unified TFN)
-        self.pos_embeddings = nn.Linear(pos_dim, embed_dim)
+        # Position embeddings (now modular via shared factory)
+        self.pos_embeddings = create_positional_embedding_strategy(
+            positional_embedding_strategy,
+            max_len=max_seq_len,
+            embed_dim=embed_dim,
+            calendar_features=calendar_features,
+            feature_cardinalities=feature_cardinalities,
+        )
     def forward(self, 
                 embeddings: torch.Tensor,      # [B, N, D] token embeddings
                 positions: torch.Tensor,       # [B, N, P] token positions
@@ -80,6 +96,10 @@ class EnhancedTFNLayer(nn.Module):
         batch_size, num_tokens, embed_dim = embeddings.shape
         if grid_points is None:
             grid_points = self._generate_grid_points(batch_size)
+        # Optionally add positional embeddings before projection
+        if add_pos_emb and self.pos_embeddings is not None:
+            embeddings = embeddings + self.pos_embeddings(positions, calendar_features=None)
+
         # Step 1: Field Projection
         field = self.field_projector(embeddings, positions, grid_points)  # [B, M, D]
         # Step 2: Unified Field Dynamics (evolution + interference + constraints)

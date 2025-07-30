@@ -12,6 +12,28 @@ from data.arxiv_loader import ArxivDataset
 from data.pg19_loader import PG19Dataset
 from data.wikitext_loader import WikiTextDataset
 
+def language_modeling_collate(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+    """
+    Collate function for language modeling datasets (WikiText, PG19).
+    
+    Args:
+        batch: List of dictionaries with 'input_ids', 'attention_mask', 'labels'
+    
+    Returns:
+        Dictionary with batched tensors
+    """
+    # Stack all tensors
+    input_ids = torch.stack([item['input_ids'] for item in batch])
+    attention_mask = torch.stack([item['attention_mask'] for item in batch])
+    labels = torch.stack([item['labels'] for item in batch])
+    
+    return {
+        'input_ids': input_ids,
+        'attention_mask': attention_mask,
+        'labels': labels,
+    }
+
+
 def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: str = "copy") -> Dict[str, torch.Tensor]:
     """Custom ``collate_fn`` that pads variable-length sequences.
 
@@ -118,6 +140,14 @@ class SyntheticCopyDataset(Dataset):
         return item
 
 def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
+    # Map split names for datasets that use different naming conventions
+    split_mapping = {
+        'val': 'validation',  # WikiText uses 'validation' instead of 'val'
+        'validation': 'validation',
+        'train': 'train',
+        'test': 'test'
+    }
+    mapped_split = split_mapping.get(split, split)
     """
     Factory to select the correct dataset based on config['data']['dataset_name'].
     Args:
@@ -182,7 +212,7 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
     elif dataset_name == "glue":
         return GLUEDataset(
             task=data_cfg.get("task", "sst2"),
-            split=split,
+            split=mapped_split,
             max_length=data_cfg.get("max_length", 512),
             tokenizer_name=data_cfg.get("tokenizer_name", "bert-base-uncased"),
         )
@@ -197,17 +227,20 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
     elif dataset_name == "pg19":
         return PG19Dataset(
             data_dir=data_cfg.get("data_dir", "data/pg19"),
-            split=split,
+            split=mapped_split,
             max_length=data_cfg.get("max_length", 512),
             tokenizer_name=data_cfg.get("tokenizer_name", "gpt2"),
         )
     
     elif dataset_name == "wikitext":
         return WikiTextDataset(
-            data_dir=data_cfg.get("data_dir", "data/wikitext"),
-            split=split,
-            max_length=data_cfg.get("max_length", 512),
+            dataset_name=data_cfg.get("wikitext_dataset_name", "wikitext-2-raw-v1"),
             tokenizer_name=data_cfg.get("tokenizer_name", "gpt2"),
+            max_length=data_cfg.get("max_length", 512),
+            split=mapped_split,
+            text_col=data_cfg.get("text_col", "text"),
+            use_streaming=data_cfg.get("use_streaming", False),
+            max_samples=data_cfg.get("max_samples", None),
         )
     
     else:
@@ -228,7 +261,12 @@ def get_dataloader(config: Dict[str, Any], split: str = 'train') -> DataLoader:
     
     # Determine task type for collate function
     task = config.get("model", {}).get("task", "classification")
-    if task == "regression":
+    dataset_name = config.get("data", {}).get("dataset_name", "")
+    
+    # Special handling for language modeling datasets
+    if dataset_name in ["wikitext", "pg19"]:
+        collate_fn = lambda batch: language_modeling_collate(batch)
+    elif task == "regression":
         collate_fn = lambda batch: pad_collate(batch, task="regression")
     else:
         collate_fn = lambda batch: pad_collate(batch, task="classification")

@@ -5,11 +5,12 @@ from torch.utils.data import DataLoader
 from typing import Optional, Dict, Any
 from src import metrics
 from src.flops_tracker import create_flops_tracker, log_flops_stats
+from src.task_strategies import TaskStrategy
 import math
 
 class Trainer:
     """
-    Universal Trainer for classification, regression, time series, NER, and language modeling.
+    Universal Trainer using the Strategy design pattern for task-specific logic.
     Handles device, optimizer, scheduler, loss, metrics, and robust batch formats.
     """
     def __init__(
@@ -18,7 +19,7 @@ class Trainer:
         train_loader: DataLoader,
         val_loader: Optional[DataLoader] = None,
         test_loader: Optional[DataLoader] = None,
-        task: str = "classification",
+        strategy: TaskStrategy = None,
         device: str = "cpu",
         lr: float = 1e-3,
         weight_decay: float = 0.0,
@@ -32,7 +33,7 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.test_loader = test_loader
-        self.task = task
+        self.strategy = strategy
         self.device = torch.device(device)
         self.epochs = epochs
         self.grad_clip = grad_clip
@@ -42,6 +43,9 @@ class Trainer:
 
         # Get the scaler from the training dataset for denormalization during evaluation
         self.scaler = getattr(train_loader.dataset, 'scaler', None)
+        
+        # Get target column index for regression tasks with scalers
+        self.target_col_idx = getattr(train_loader.dataset, 'target_col', 0)
 
         # Create FLOPS tracker if enabled
         if self.track_flops:
@@ -52,13 +56,11 @@ class Trainer:
 
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
         self.scheduler = self._build_scheduler(lr, warmup_epochs)
-        self.criterion = self._select_criterion(task)
+        
+        # The strategy provides the loss function
+        self.criterion = self.strategy.get_criterion() if self.strategy else torch.nn.MSELoss()
 
-    def _select_criterion(self, task: str):
-        if task in ("classification", "ner", "language_modeling"):
-            return torch.nn.CrossEntropyLoss()
-        else:
-            return torch.nn.MSELoss()
+
 
     def _build_scheduler(self, lr: float, warmup_epochs: int):
         total_steps = self.epochs * len(self.train_loader)
@@ -95,26 +97,7 @@ class Trainer:
         else:
             raise ValueError(f"Unknown batch format: keys {list(batch.keys())}")
 
-    def _accuracy(self, logits, targets):
-        # For classification/NER
-        preds = torch.argmax(logits, dim=-1)
-        correct = (preds == targets).float().sum().item()
-        total = targets.numel()
-        return correct / total
-    
-    def _language_modeling_accuracy(self, logits, targets):
-        # For language modeling - next token prediction accuracy
-        # Ignore padding tokens (targets == -100)
-        valid_mask = targets != -100
-        if valid_mask.sum() == 0:
-            return 0.0
-        
-        preds = torch.argmax(logits, dim=-1)
-        correct = (preds == targets).float()
-        # Only count valid tokens (not padding)
-        correct = correct[valid_mask].sum().item()
-        total = valid_mask.sum().item()
-        return correct / total if total > 0 else 0.0
+
 
     def _fmt(self, val):
         return f"{val:.4f}" if val is not None else "N/A"
@@ -175,110 +158,51 @@ class Trainer:
             self.model.train()
         else:
             self.model.eval()
-        total_loss, total_acc, total_mse, total_mae, n_batches = 0.0, 0.0, 0.0, 0.0, 0
+        
+        total_loss = 0.0
+        total_metrics = {}
+        n_batches = 0
+        
         for batch_idx, batch in enumerate(loader, start=1):
             x, y = self._unpack_batch(batch)
             if train:
                 self.optimizer.zero_grad(set_to_none=True)
+                
             with torch.set_grad_enabled(train):
-                if self.task in ("classification", "ner"):
-                    if isinstance(x, tuple):
-                        logits = self.model(x[0])
-                    else:
-                        logits = self.model(x)
-                    if logits.dim() == 3 and logits.size(1) > 1:
-                        logits = logits.mean(dim=1)
-                    loss = self.criterion(logits, y)
-                    acc = self._accuracy(logits, y)
-                    mse_val = mae_val = None
-                elif self.task in ("regression", "time_series"):
-                    preds = self.model(x)
-                    
-                    # Handle shape mismatches between model output and targets
-                    # Model output: [B, output_len, output_dim]
-                    # Target shape: [B, seq_len, input_dim] or [B, seq_len]
-                    
-                    # Ensure consistent shapes for loss and metric calculation
-                    if y.dim() == 3:
-                        # Target is [B, seq_len, input_dim]
-                        if preds.shape[1] != y.shape[1] or preds.shape[2] != y.shape[2]:
-                            # Reshape predictions to match target shape
-                            if preds.shape[1] > y.shape[1]:
-                                # Truncate predictions to match target length
-                                preds = preds[:, :y.shape[1], :]
-                            elif preds.shape[1] < y.shape[1]:
-                                # Pad predictions to match target length
-                                padding = preds[:, -1:, :].repeat(1, y.shape[1] - preds.shape[1], 1)
-                                preds = torch.cat([preds, padding], dim=1)
-                            
-                            # Handle output dimension mismatch
-                            if preds.shape[2] != y.shape[2]:
-                                if preds.shape[2] > y.shape[2]:
-                                    preds = preds[:, :, :y.shape[2]]
-                                else:
-                                    padding = torch.zeros(preds.shape[0], preds.shape[1], y.shape[2] - preds.shape[2], device=preds.device)
-                                    preds = torch.cat([preds, padding], dim=2)
-                    
-                    # Flatten for loss calculation (consistent approach)
-                    y_flat = y.view(y.size(0), -1)
-                    preds_flat = preds.view(preds.size(0), -1)
-                    loss = self.criterion(preds_flat, y_flat)
-                    acc = None
-                    
-                    # Calculate metrics using the same flattened tensors for consistency
-                    mse_val = metrics.mse(preds_flat, y_flat)
-                    mae_val = metrics.mae(preds_flat, y_flat)
-                    
-                    # Denormalize predictions and targets for metric calculation if scaler exists
-                    # Apply denormalization consistently for both training and validation
-                    if self.scaler is not None:
-                        # Get the target column index from the dataset
-                        target_col_idx = getattr(loader.dataset, 'target_col', 0)
-                        
-                        # Get the mean and std for the target column ONLY
-                        mean = self.scaler.mean_[target_col_idx]
-                        std = self.scaler.scale_[target_col_idx]
-                        
-                        # Denormalize predictions and targets
-                        # Formula: original = normalized * std + mean
-                        preds_denorm = preds_flat * std + mean
-                        y_denorm = y_flat * std + mean
-                        
-                        # Calculate metrics on the original scale
-                        mse_val = metrics.mse(preds_denorm, y_denorm)
-                        mae_val = metrics.mae(preds_denorm, y_denorm)
-                elif self.task == "language_modeling":
-                    # For LM, x may be a tuple (input_ids, attention_mask)
-                    if isinstance(x, tuple):
-                        logits = self.model(x[0])
-                    else:
-                        logits = self.model(x)
-                    # logits: [B, L, vocab_size], y: [B, L]
-                    logits_flat = logits.view(-1, logits.size(-1))
-                    y_flat = y.view(-1)
-                    loss = self.criterion(logits_flat, y_flat)
-                    acc = self._language_modeling_accuracy(logits_flat, y_flat)
-                    mse_val = mae_val = None
-                else:
-                    raise ValueError(f"Unknown task: {self.task}")
+                # Delegate forward pass and loss calculation to strategy
+                logits, loss = self.strategy.process_forward_pass(self.model, x, y)
+                
                 if train:
                     loss.backward()
                     if self.grad_clip is not None:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
                     self.optimizer.step()
                     self.scheduler.step()
+            
+            # Delegate metric calculation to strategy
+            batch_metrics = self.strategy.calculate_metrics(
+                logits, y, scaler=self.scaler, target_col_idx=self.target_col_idx
+            )
+            
+            # Accumulate metrics
             total_loss += loss.item()
-            if acc is not None:
-                total_acc += acc
-            if mse_val is not None:
-                total_mse += mse_val
-            if mae_val is not None:
-                total_mae += mae_val
+            for key, value in batch_metrics.items():
+                if key not in total_metrics:
+                    total_metrics[key] = 0.0
+                total_metrics[key] += value
             n_batches += 1
+        
+        # Calculate averages
         avg_loss = total_loss / n_batches if n_batches > 0 else None
-        avg_acc = total_acc / n_batches if n_batches > 0 else None
-        avg_mse = total_mse / n_batches if n_batches > 0 else None
-        avg_mae = total_mae / n_batches if n_batches > 0 else None
+        avg_metrics = {}
+        for key, total_value in total_metrics.items():
+            avg_metrics[key] = total_value / n_batches if n_batches > 0 else None
+        
+        # Return in the expected format (loss, acc, mse, mae) for backward compatibility
+        avg_acc = avg_metrics.get("acc", None)
+        avg_mse = avg_metrics.get("mse", None)
+        avg_mae = avg_metrics.get("mae", None)
+        
         return avg_loss, avg_acc, avg_mse, avg_mae
 
 if __name__ == "__main__":

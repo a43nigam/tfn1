@@ -140,7 +140,11 @@ class TFN(nn.Module):
                     dt=0.01,  # Default for UnifiedFieldDynamics
                     dropout=dropout,
                     use_physics_constraints=False,
-                    constraint_weight=0.1
+                    constraint_weight=0.1,
+                    positional_embedding_strategy=positional_embedding_strategy,
+                    calendar_features=calendar_features,
+                    feature_cardinalities=feature_cardinalities,
+                    max_seq_len=output_len,
                 )
             else:
                 # TrainableTFNLayer parameters
