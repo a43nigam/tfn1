@@ -8,7 +8,7 @@ discrete token embeddings into continuous fields using kernel-based emission.
 import torch
 import torch.nn as nn
 from typing import Tuple, Optional, Union
-from .kernels import (KernelBasis, RBFKernel, CompactKernel, FourierKernel, LearnableKernel,
+from .kernels import (KernelBasis, RBFKernel, CompactKernel, FourierKernel,
                      DataDependentRBFKernel, DataDependentCompactKernel, 
                      FiLMLearnableKernel)
 

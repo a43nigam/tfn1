@@ -5,7 +5,7 @@ This module implements a unified mathematical framework that properly integrates
 field interference and evolution with stability analysis and physics constraints.
 
 Mathematical formulation:
-    ∂F/∂t = L(F) + I(F) + C(F)
+    ∂F/∂t = L(F) + I(F)
     
 Where:
     - L(F) = linear evolution operator (diffusion, wave, Schrödinger)
@@ -24,25 +24,22 @@ from .field_evolution import DynamicFieldPropagator
 
 class UnifiedFieldDynamics(nn.Module):
     """
-    Unified field dynamics with interference and evolution.
-    
-    Implements a mathematically sound integration of field interference
-    and evolution with stability analysis and physics constraints.
+    Unified field dynamics combining linear evolution and nonlinear interference
+    and evolution with stability analysis.
     
     Mathematical formulation:
-        ∂F/∂t = L(F) + I(F) + C(F)
-        F(t+Δt) = F(t) + Δt * [L(F) + I(F) + C(F)]
+        ∂F/∂t = L(F) + I(F)
+        F(t+Δt) = F(t) + [L(F) + I(F)]
+    
+    Where L(F) and I(F) include learned scaling parameters internally.
     """
     
-    def __init__(self, 
+    def __init__(self,
                  embed_dim: int,
                  pos_dim: int,
                  evolution_type: str = "diffusion",
                  interference_type: str = "standard",
                  num_steps: int = 4,
-                 dt: float = 0.01,
-                 interference_weight: float = 0.5,
-                 constraint_weight: float = 0.1,
                  stability_threshold: float = 1.0,
                  dropout: float = 0.1):
         """
@@ -52,11 +49,8 @@ class UnifiedFieldDynamics(nn.Module):
             embed_dim: Dimension of token embeddings
             pos_dim: Dimension of position space
             evolution_type: Type of evolution ("diffusion", "wave", "schrodinger")
-            interference_type: Type of interference ("standard", "causal", "multiscale", "physics")
+            interference_type: Type of interference ("standard", "causal", "multiscale")
             num_steps: Number of evolution steps
-            dt: Time step size
-            interference_weight: Weight for interference terms
-            constraint_weight: Weight for physics constraints
             stability_threshold: Threshold for stability analysis
             dropout: Dropout rate for regularization
         """
@@ -65,9 +59,6 @@ class UnifiedFieldDynamics(nn.Module):
         self.pos_dim = pos_dim
         self.evolution_type = evolution_type
         self.num_steps = num_steps
-        self.dt = dt
-        self.interference_weight = interference_weight
-        self.constraint_weight = constraint_weight
         self.stability_threshold = stability_threshold
         
         # Linear evolution operator
@@ -78,12 +69,6 @@ class UnifiedFieldDynamics(nn.Module):
             embed_dim=embed_dim,
             interference_types=("constructive", "destructive", "phase"),
             dropout=dropout
-        )
-        
-        # Physics constraint operator
-        self.constraint_operator = PhysicsConstraintOperator(
-            embed_dim=embed_dim,
-            constraint_weight=constraint_weight
         )
         
         # Stability monitor
@@ -147,22 +132,18 @@ class UnifiedFieldDynamics(nn.Module):
             # Compute interference: I(F)
             interference = self.interference_operator(evolved_fields, positions)
             
-            # Compute physics constraints: C(F)
-            constraints = self.constraint_operator(evolved_fields)
-            
-            # Combined evolution: ∂F/∂t = L(F) + I(F) + C(F)
-            constraints = constraints.sum(dim=-1)  # [B, N, D]
-            total_evolution = (linear_evolution + 
-                             self.interference_weight * interference + 
-                             self.constraint_weight * constraints)
+            # Combined evolution: ∂F/∂t = L(F) + I(F)
+            # The model will learn proper scaling internally through its parameters
+            total_evolution = linear_evolution + interference
             
             # Stability check
             if not self.stability_monitor.check_stability(total_evolution):
                 # Apply stability correction
                 total_evolution = self.stability_monitor.apply_stability_correction(total_evolution)
             
-            # Update fields: F(t+Δt) = F(t) + Δt * [L(F) + I(F) + C(F)]
-            evolved_fields = evolved_fields + self.dt * total_evolution
+            # Update fields: F(t+Δt) = F(t) + [L(F) + I(F)]
+            # The evolution operators include learned time scaling internally
+            evolved_fields = evolved_fields + total_evolution
             
             # Apply dropout for regularization
             evolved_fields = self.dropout(evolved_fields)
@@ -171,10 +152,6 @@ class UnifiedFieldDynamics(nn.Module):
         output = self.output_proj(evolved_fields)
         
         return output
-    
-    def get_physics_constraints(self) -> Dict[str, torch.Tensor]:
-        """Get physics constraint losses."""
-        return self.constraint_operator.get_constraints()
     
     def get_stability_metrics(self) -> Dict[str, torch.Tensor]:
         """Get stability metrics."""
@@ -276,57 +253,6 @@ class SchrodingerOperator(nn.Module):
         evolution_real = hamiltonian_evolution_imag  # Real part of -i*HF
         
         return evolution_real
-
-
-class PhysicsConstraintOperator(nn.Module):
-    """Physics constraint operator for energy conservation and symmetry."""
-    
-    def __init__(self, embed_dim: int, constraint_weight: float = 0.1):
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.constraint_weight = constraint_weight
-        
-        # Energy conservation parameters
-        self.energy_target = nn.Parameter(torch.tensor(1.0))
-        
-    def forward(self, fields: torch.Tensor) -> torch.Tensor:
-        """Apply physics constraints."""
-        batch_size, num_tokens, embed_dim = fields.shape
-        
-        # Energy conservation constraint
-        field_energy = torch.norm(fields, dim=-1, keepdim=True)**2  # [B, N, 1]
-        energy_constraint = (field_energy - self.energy_target).unsqueeze(-1).expand(-1, -1, embed_dim, -1)  # [B, N, D, 1]
-        
-        # Symmetry constraint (field should be symmetric around center)
-        center_idx = num_tokens // 2
-        if num_tokens % 2 == 0:
-            # Even number of tokens
-            left_half = fields[:, :center_idx, :]
-            right_half = fields[:, center_idx:, :].flip(dims=[1])
-            symmetry_constraint = (left_half - right_half).unsqueeze(-1)  # [B, N//2, D, 1]
-        else:
-            # Odd number of tokens
-            left_half = fields[:, :center_idx, :]
-            right_half = fields[:, center_idx+1:, :].flip(dims=[1])
-            symmetry_constraint = (left_half - right_half).unsqueeze(-1)  # [B, N//2, D, 1]
-        
-        # Pad symmetry constraint to match energy constraint dimensions
-        # [B, N//2, D, 1] -> [B, N, D, 1]
-        if symmetry_constraint.shape[1] < num_tokens:
-            padding_size = num_tokens - symmetry_constraint.shape[1]
-            symmetry_constraint = F.pad(symmetry_constraint, (0, 0, 0, 0, 0, padding_size))
-        
-        # Combine constraints - ensure they have the same shape
-        constraints = torch.cat([energy_constraint, symmetry_constraint], dim=-1)
-        
-        return constraints
-    
-    def get_constraints(self) -> Dict[str, torch.Tensor]:
-        """Get constraint losses."""
-        return {
-            "energy_conservation": self.energy_target,
-            "symmetry": torch.tensor(0.0)  # Placeholder
-        }
 
 
 class StabilityMonitor(nn.Module):

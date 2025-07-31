@@ -2,7 +2,19 @@
 Base TFN Layer Components
 
 Clean, reusable model classes for Token Field Network layers.
+
+DEPRECATED: This module is deprecated and will be removed in a future version.
+Use the modern core components (UnifiedFieldDynamics, EnhancedTFNLayer) instead
+for better performance and maintainability.
 """
+
+import warnings
+warnings.warn(
+    "tfn_base.py is deprecated. Use UnifiedFieldDynamics and EnhancedTFNLayer "
+    "from the core/ directory instead. This module will be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 import torch
 import torch.nn as nn

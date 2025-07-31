@@ -12,7 +12,7 @@ This module contains the fundamental building blocks of the Token Field Network:
 
 from .kernels import (
     KernelBasis, RBFKernel, CompactKernel, FourierKernel, 
-    LearnableKernel, KernelFactory
+    KernelFactory
 )
 from .field_projection import FieldProjector, UniformFieldGrid
 from .field_evolution import (
@@ -21,20 +21,19 @@ from .field_evolution import (
 )
 from .field_interference import (
     TokenFieldInterference, CausalFieldInterference, 
-    MultiScaleFieldInterference, PhysicsConstrainedInterference,
+    MultiScaleFieldInterference,
     create_field_interference
 )
 from .unified_field_dynamics import (
     UnifiedFieldDynamics, DiffusionOperator, WaveOperator,
-    SchrodingerOperator, PhysicsConstraintOperator, StabilityMonitor,
-    create_unified_field_dynamics
+    SchrodingerOperator, StabilityMonitor
 )
 from .field_sampling import FieldSampler
 
 __all__ = [
     # Kernel system
     'KernelBasis', 'RBFKernel', 'CompactKernel', 'FourierKernel', 
-    'LearnableKernel', 'KernelFactory',
+    'KernelFactory',
     # Field projection
     'FieldProjector', 'UniformFieldGrid',
     # Field evolution

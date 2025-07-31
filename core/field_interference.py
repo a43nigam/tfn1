@@ -186,26 +186,94 @@ class CausalFieldInterference(TokenFieldInterference):
         """
         batch_size, num_tokens, embed_dim = token_fields.shape
         
-        # Create causal mask (lower triangular)
-        causal_mask = torch.tril(torch.ones(num_tokens, num_tokens, device=token_fields.device), diagonal=-1)
-        causal_mask = causal_mask.unsqueeze(0).unsqueeze(-1).unsqueeze(-1)  # [1, N, N, 1, 1]
+        # Reshape for multi-head interference
+        # [B, N, D] -> [B, N, H, D//H]
+        fields_reshaped = token_fields.view(batch_size, num_tokens, self.num_heads, self.head_dim)
         
-        # Apply causal mask to interference computation
-        with torch.no_grad():
-            # Temporarily modify the field coupler for causal computation
-            original_coupler = self.field_coupler.clone()
-            # Apply causal constraint by masking the coupler
-            causal_weight = causal_mask.mean().item()
-            self.field_coupler.data = self.field_coupler * causal_weight
+        # Create causal mask using cumulative sum for safe, differentiable computation
+        # This ensures each token only sees information from previous tokens
+        causal_fields = torch.zeros_like(fields_reshaped)
         
-        # Compute interference with causal constraint
-        result = super().forward(token_fields, positions)
+        # Apply causal constraint using cumulative operations
+        for i in range(num_tokens):
+            # For token i, only include tokens 0 to i-1 (causal constraint)
+            if i > 0:
+                causal_fields[:, i, :, :] = fields_reshaped[:, :i, :, :].mean(dim=1)
+            # Token 0 has no previous context, remains zero
         
-        # Restore original coupler
-        with torch.no_grad():
-            self.field_coupler.data = original_coupler
+        # Compute interference types using causal fields
+        interference_terms = []
         
-        return result
+        if "constructive" in self.interference_types:
+            constructive = self._causal_constructive_interference(fields_reshaped, causal_fields)
+            interference_terms.append(constructive)
+            
+        if "destructive" in self.interference_types:
+            destructive = self._causal_destructive_interference(fields_reshaped, causal_fields)
+            interference_terms.append(destructive)
+            
+        if "phase" in self.interference_types:
+            phase = self._causal_phase_interference(fields_reshaped, causal_fields)
+            interference_terms.append(phase)
+        
+        # Weighted combination of interference terms
+        if len(interference_terms) == 0:
+            # No valid interference type, return zeros of correct shape
+            combined_interference = torch.zeros_like(fields_reshaped)
+        else:
+            interference_weights = F.softmax(self.interference_weights, dim=0)
+            combined_interference = sum(w * term for w, term in zip(interference_weights, interference_terms))
+        
+        # Apply interference to original fields
+        enhanced_fields = fields_reshaped + self.dropout(combined_interference)
+        
+        # Reshape back and project
+        enhanced_fields = enhanced_fields.view(batch_size, num_tokens, embed_dim)
+        output = self.output_proj(enhanced_fields)
+        
+        return output
+    
+    def _causal_constructive_interference(self, fields: torch.Tensor, causal_fields: torch.Tensor) -> torch.Tensor:
+        """Compute causal constructive interference using only past information."""
+        B, N, H, D_h = fields.shape
+        
+        # Use causal fields (past context) for interference
+        mixed_causal = torch.einsum('bnhd,hk->bnkd', causal_fields, self.field_coupler)  # [B, N, H, D_h]
+        
+        # Compute interference between current token and its causal context
+        interference = 2 * torch.sum(fields * mixed_causal, dim=-1, keepdim=True)  # [B, N, H, 1]
+        
+        return interference
+    
+    def _causal_destructive_interference(self, fields: torch.Tensor, causal_fields: torch.Tensor) -> torch.Tensor:
+        """Compute causal destructive interference using only past information."""
+        B, N, H, D_h = fields.shape
+        
+        # Use causal fields (past context) for interference  
+        mixed_causal = torch.einsum('bnhd,hk->bnkd', causal_fields, self.field_coupler)  # [B, N, H, D_h]
+        
+        # Negative interference for destructive case
+        interference = -2 * torch.sum(fields * mixed_causal, dim=-1, keepdim=True)  # [B, N, H, 1]
+        
+        return interference
+    
+    def _causal_phase_interference(self, fields: torch.Tensor, causal_fields: torch.Tensor) -> torch.Tensor:
+        """Compute causal phase interference using only past information."""
+        B, N, H, D_h = fields.shape
+        
+        # Normalise fields to unit magnitude per-token
+        norm = torch.norm(fields, dim=-1, keepdim=True) + 1e-8
+        unit_fields = fields / norm  # [B, N, H, D_h]
+        
+        # Normalise causal fields
+        causal_norm = torch.norm(causal_fields, dim=-1, keepdim=True) + 1e-8
+        unit_causal_fields = causal_fields / causal_norm  # [B, N, H, D_h]
+        
+        mixed_causal = torch.einsum('bnhd,hk->bnkd', unit_causal_fields, self.field_coupler)  # [B, N, H, D_h]
+        
+        interference = torch.sum(unit_fields * mixed_causal, dim=-1, keepdim=True)  # [B, N, H, 1]
+        
+        return interference
 
 
 class MultiScaleFieldInterference(TokenFieldInterference):
@@ -284,116 +352,6 @@ class MultiScaleFieldInterference(TokenFieldInterference):
         return combined_output
 
 
-class PhysicsConstrainedInterference(TokenFieldInterference):
-    """
-    Physics-constrained field interference with regularization.
-    
-    Enforces physical constraints like energy conservation and symmetry
-    through regularization losses rather than architectural constraints.
-    """
-    
-    def __init__(self, 
-                 embed_dim: int,
-                 num_heads: int = 8,
-                 interference_types: Tuple[str, ...] = ("constructive", "destructive", "phase"),
-                 dropout: float = 0.1,
-                 energy_weight: float = 0.1,
-                 symmetry_weight: float = 0.1):
-        """
-        Initialize physics-constrained interference.
-        
-        Args:
-            embed_dim: Dimension of token embeddings
-            num_heads: Number of interference heads
-            interference_types: Types of interference to compute
-            dropout: Dropout rate for regularization
-            energy_weight: Weight for energy conservation constraint
-            symmetry_weight: Weight for symmetry preservation constraint
-        """
-        super().__init__(embed_dim, num_heads, interference_types, dropout)
-        self.energy_weight = energy_weight
-        self.symmetry_weight = symmetry_weight
-        
-    def forward(self, 
-                token_fields: torch.Tensor,  # [B, N, D]
-                positions: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """
-        Compute physics-constrained field interference.
-        
-        Args:
-            token_fields: Token field representations [B, N, D]
-            positions: Token positions [B, N, P] (optional)
-            
-        Returns:
-            Physics-constrained interference-enhanced fields [B, N, D]
-        """
-        # Store original fields for constraint computation
-        original_fields = token_fields.clone()
-        
-        # Compute interference
-        enhanced_fields = super().forward(token_fields, positions)
-        
-        # Store constraint losses for external access
-        self.constraint_losses = self._compute_physics_constraints(original_fields, enhanced_fields)
-        
-        return enhanced_fields
-    
-    def _compute_physics_constraints(self, 
-                                   original_fields: torch.Tensor,  # [B, N, D]
-                                   enhanced_fields: torch.Tensor) -> Dict[str, torch.Tensor]:  # [B, N, D]
-        """
-        Compute physics constraint losses.
-        
-        Args:
-            original_fields: Original token fields [B, N, D]
-            enhanced_fields: Enhanced token fields [B, N, D]
-            
-        Returns:
-            Dictionary of constraint losses
-        """
-        # Energy conservation: ||F||² should be approximately constant
-        original_energy = torch.norm(original_fields, dim=-1)  # [B, N]
-        enhanced_energy = torch.norm(enhanced_fields, dim=-1)  # [B, N]
-        
-        energy_conservation = F.mse_loss(enhanced_energy, original_energy)
-        
-        # Symmetry preservation: F(z) ≈ F(-z) for symmetric problems
-        # For token fields, we check if the field is approximately symmetric around the middle
-        mid_point = enhanced_fields.shape[1] // 2
-        first_half = enhanced_fields[:, :mid_point, :]
-        second_half = enhanced_fields[:, mid_point:2*mid_point, :].flip(dims=[1])
-        
-        symmetry_preservation = F.mse_loss(first_half, second_half)
-        
-        # Divergence constraint: ∇·F ≈ 0 (for incompressible fields)
-        # Approximate divergence using finite differences
-        if enhanced_fields.shape[1] > 1:
-            field_gradients = enhanced_fields[:, 1:, :] - enhanced_fields[:, :-1, :]  # [B, N-1, D]
-            divergence = torch.mean(torch.norm(field_gradients, dim=-1))
-        else:
-            divergence = torch.tensor(0.0, device=enhanced_fields.device)
-        
-        return {
-            "energy_conservation": energy_conservation,
-            "symmetry_preservation": symmetry_preservation,
-            "divergence": divergence
-        }
-    
-    def get_constraint_loss(self) -> torch.Tensor:
-        """
-        Get the total physics constraint loss.
-        
-        Returns:
-            Total constraint loss for regularization
-        """
-        if not hasattr(self, 'constraint_losses'):
-            return torch.tensor(0.0, device=next(self.parameters()).device)
-        
-        total_loss = (self.energy_weight * self.constraint_losses["energy_conservation"] +
-                     self.symmetry_weight * self.constraint_losses["symmetry_preservation"])
-        
-        return total_loss
-
 
 def create_field_interference(interference_type: str = "standard",
                             embed_dim: int = 256,
@@ -403,7 +361,7 @@ def create_field_interference(interference_type: str = "standard",
     Factory function to create field interference modules.
     
     Args:
-        interference_type: Type of interference ("standard", "causal", "multiscale", "physics")
+        interference_type: Type of interference ("standard", "causal", "multiscale")
         embed_dim: Dimension of token embeddings
         num_heads: Number of interference heads
         **kwargs: Additional arguments for specific interference types
@@ -417,7 +375,5 @@ def create_field_interference(interference_type: str = "standard",
         return CausalFieldInterference(embed_dim, num_heads, **kwargs)
     elif interference_type == "multiscale":
         return MultiScaleFieldInterference(embed_dim, num_heads, **kwargs)
-    elif interference_type == "physics":
-        return PhysicsConstrainedInterference(embed_dim, num_heads, **kwargs)
     else:
         raise ValueError(f"Unknown interference type: {interference_type}") 

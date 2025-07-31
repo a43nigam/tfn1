@@ -6,7 +6,7 @@ A novel deep learning architecture that replaces attention with field projection
 
 TFN operates through three core phases:
 1. **Field Projection**: Tokens emit continuous fields across spatial domain using learnable kernels
-2. **Field Evolution**: Fields evolve over time using physics-inspired or learned dynamics
+2. **Field Evolution**: Fields evolve over time using physics-inspired or learned dynamics  
 3. **Field Sampling**: Evolved fields are sampled back to update token representations
 
 This approach provides:
@@ -14,6 +14,7 @@ This approach provides:
 - **Physics-Inspired**: Leverages continuous field dynamics (diffusion, wave, Schrödinger equations)
 - **Modular Design**: Independent, testable components for field emission, evolution, and sampling
 - **Numerical Stability**: Careful handling of tensor operations and gradient flow
+- **Simplified Architecture**: Streamlined components focused on core TFN principles
 
 ## 📋 Table of Contents
 
@@ -91,7 +92,7 @@ The model registry provides pre-configured model templates:
 
 #### **Enhanced TFN Models**
 - **`enhanced_tfn_classifier`**: Advanced classification with field interference
-- **`enhanced_tfn_regressor`**: Advanced regression with physics constraints
+- **`enhanced_tfn_regressor`**: Advanced regression with unified dynamics
 - **`enhanced_tfn_language_model`**: Advanced language modeling with unified dynamics
 
 #### **Baseline Models**
@@ -106,8 +107,7 @@ The model registry provides pre-configured model templates:
 |---------|----------|--------------|
 | **Field Evolution** | CNN, PDE | CNN, PDE, Diffusion, Wave, Schrödinger, Spatially-varying PDE |
 | **Field Interference** | Optional | Integrated (Standard, Causal, Multi-scale) |
-| **Physics Constraints** | ❌ | ✅ (Energy conservation, symmetry) |
-| **Kernels** | RBF, Compact, Fourier | + Learnable, FiLM, Data-dependent |
+| **Kernels** | RBF, Compact, Fourier | + Data-dependent, FiLM, Multi-frequency |
 | **Complexity** | Low | High |
 | **Use Case** | General tasks | Physics-inspired, complex sequences |
 
@@ -123,9 +123,9 @@ Kernels determine how tokens emit fields across the spatial domain:
 - **`fourier`**: Oscillatory - `K(z,μ,f) = cos(2πf||z-μ||)`
 
 #### **Advanced Kernels**
-- **`learnable`**: Neural network-based adaptive kernel
 - **`film_learnable`**: Feature-wise Linear Modulation kernel
 - **`data_dependent_rbf`**: Content-aware RBF with learned parameters
+- **`data_dependent_compact`**: Content-aware compact kernel
 - **`multi_frequency_fourier`**: Multi-scale frequency analysis
 
 ### Field Evolution (`core/field_evolution.py`)
@@ -141,7 +141,7 @@ Evolution types control how fields change over time:
 - **`wave`**: Wave equation - `∂²F/∂t² = c²∇²F`
 - **`schrodinger`**: Quantum-inspired - `iℏ∂F/∂t = ĤF`
 - **`spatially_varying_pde`**: Adaptive PDE coefficients
-- **`modernized_cnn`**: Efficient CNN with depthwise convolutions
+- **`modernized_cnn`**: Efficient CNN with multi-scale convolutions
 
 ### Field Interference (`core/field_interference.py`)
 
@@ -150,7 +150,14 @@ Controls how token fields interact:
 - **`standard`**: Multi-head interference with learnable coupling
 - **`causal`**: Respects temporal causality for autoregressive tasks
 - **`multi_scale`**: Multi-resolution field interactions
-- **`physics_constrained`**: Energy conservation and symmetry constraints
+
+### Unified Field Dynamics (`core/unified_field_dynamics.py`)
+
+Combines evolution and interference in a mathematically sound framework:
+
+- **Linear Evolution**: `L(F)` - Physics-inspired field dynamics
+- **Nonlinear Interference**: `I(F)` - Token field interactions
+- **Combined Dynamics**: `∂F/∂t = L(F) + I(F)`
 
 ### Positional Embeddings (`model/shared_layers.py`)
 
@@ -198,155 +205,92 @@ feature_cardinalities:
 - **ArXiv**: Paper abstract classification (`configs/arxiv.yaml`)
 
 #### **Language Modeling**
+- **PG-19**: Long-form text generation (`configs/pg19.yaml`)
 - **WikiText**: Wikipedia articles (`configs/wikitext.yaml`)
-- **PG19**: Project Gutenberg books (`configs/pg19.yaml`)
 
-#### **Synthetic Tasks**
-- **Synthetic Copy**: Sequence copying task (`configs/synthetic_copy.yaml`)
-
-### Data Normalization Strategies
-
-The codebase supports multiple normalization approaches:
-
-#### **For Time Series**
-- **`global`**: Dataset-wide standardization (default)
-- **`instance`**: Per-sample normalization (removes scale, preserves patterns)
-- **`feature_wise`**: Per-feature standardization
-
-```yaml
-data:
-  normalization_strategy: "instance"  # or "global", "feature_wise"
-  instance_normalize: true  # Apply during data loading
-```
-
-## 🚀 Training
+## 🎯 Training
 
 ### Basic Training
 
 ```bash
-# Train with config file
-python train.py --config configs/ett_combined_improvements.yaml
+# Single model training
+python train.py --config configs/ett.yaml
 
-# Override parameters
-python train.py --config configs/imdb.yaml \
-    --model.embed_dim 256 \
-    --model.num_layers 4 \
-    --training.lr 1e-4 \
-    --training.batch_size 64
-```
-
-### Model Selection
-
-```bash
-# Use specific model from registry
-python train.py --config configs/ett.yaml \
-    --model_name enhanced_tfn_regressor
-
-# Available model names:
-# - tfn_classifier, tfn_regressor, tfn_language_model, tfn_vision
-# - enhanced_tfn_classifier, enhanced_tfn_regressor, enhanced_tfn_language_model  
-# - transformer_classifier, performer_classifier, lstm_classifier, cnn_classifier
-# - transformer_regressor, performer_regressor, lstm_regressor, cnn_regressor
+# Multi-GPU training
+python train.py --config configs/ett.yaml --gpus 0,1,2,3
 ```
 
 ### Hyperparameter Search
 
 ```bash
-# Search across models and parameters
+# Grid search over model parameters
 python hyperparameter_search.py \
-    --models tfn_regressor enhanced_tfn_regressor \
-    --param_sweep embed_dim:128,256,512 kernel_type:rbf,compact evolution_type:cnn,pde \
-    --epochs 30 --patience 8 \
+    --models enhanced_tfn_regressor \
+    --param_sweep "embed_dim:128,256 kernel_type:rbf,compact evolution_type:cnn,diffusion" \
+    --epochs 50 \
     --output_dir ./search_results
 
-# Search with specific config base
+# Bayesian optimization
 python hyperparameter_search.py \
-    --config configs/ett.yaml \
-    --models tfn_regressor \
-    --param_sweep embed_dim:128,256 evolution_type:cnn,pde,diffusion \
-    --epochs 20 --output_dir ./ett_search
+    --models enhanced_tfn_regressor \
+    --optimizer bayesian \
+    --n_trials 100 \
+    --epochs 30 \
+    --output_dir ./bayesian_search
 ```
+
+### Advanced Training Features
+
+- **Instance Normalization**: Normalize each sequence independently
+- **Time-Based Embeddings**: Calendar-aware positional encoding
+- **Multi-Scale Processing**: Handle varying sequence lengths
+- **Gradient Clipping**: Prevent gradient explosion
+- **Learning Rate Scheduling**: Adaptive learning rates
 
 ## ⚙️ Configuration
 
-### YAML Configuration Structure
+### Model Configuration
 
 ```yaml
-# Model selection (optional - can use model_name instead)
-model_name: enhanced_tfn_regressor
-
-# Data configuration
-data:
-  dataset_name: ett
-  csv_path: data/ETTh1.csv
-  input_len: 96      # Input sequence length
-  output_len: 24     # Output sequence length
-  normalization_strategy: instance
-  instance_normalize: true
-
-# Model architecture
 model:
-  task: regression
-  input_dim: 7       # Number of input features
-  embed_dim: 128     # Embedding dimension
-  output_dim: 1      # Number of output features
-  output_len: 24     # Output sequence length
-  num_layers: 2      # Number of TFN layers
-  kernel_type: rbf   # Field emission kernel
-  evolution_type: cnn # Field evolution method
-  interference_type: standard # Field interference (enhanced models only)
-  grid_size: 100     # Spatial discretization
-  time_steps: 3      # Evolution steps
+  # Core parameters
+  embed_dim: 128
+  num_layers: 2
+  kernel_type: rbf
+  evolution_type: cnn
+  
+  # Field interference
+  interference_type: standard  # standard, causal, multiscale
+  
+  # Grid settings
+  grid_size: 100
+  
+  # Positional embeddings
+  positional_embedding_strategy: learned  # learned, sinusoidal, time_based
+  max_seq_len: 512
+```
+
+### Training Configuration
+
+```yaml
+training:
+  # Optimization
+  optimizer: adam
+  learning_rate: 0.001
+  weight_decay: 0.01
+  
+  # Training loop
+  epochs: 100
+  batch_size: 32
+  gradient_clip: 1.0
+  
+  # Regularization
   dropout: 0.1
   
-  # Advanced features
-  use_enhanced: false
-  positional_embedding_strategy: time_based
-  calendar_features: ["hour", "day_of_week", "month"]
-  feature_cardinalities:
-    hour: 24
-    day_of_week: 7
-    month: 12
-
-# Training configuration  
-training:
-  batch_size: 32
-  lr: 1e-3
-  epochs: 50
-  weight_decay: 1e-4
-  optimizer: adamw
-  warmup_epochs: 5
-  grad_clip: 1.0
+  # Monitoring
   log_interval: 100
+  eval_interval: 1000
 ```
-
-### Parameter Override
-
-```bash
-# Override nested parameters
-python train.py --config configs/ett.yaml \
-    --model.embed_dim 512 \
-    --model.kernel_type compact \
-    --data.normalization_strategy global \
-    --training.lr 5e-4
-```
-
-## 🔬 Advanced Features
-
-### Instance Normalization for Time Series
-
-Instance normalization normalizes each time series sample individually, helping the model focus on patterns rather than absolute values:
-
-```yaml
-data:
-  normalization_strategy: "instance"
-  instance_normalize: true
-```
-
-**Benefits:**
-- Scale-invariant pattern recognition
-- Better generalization across different value ranges
-- Improved training stability for time series
 
 ### Time-Based Embeddings
 
@@ -375,15 +319,14 @@ Enhanced models support physics-based field evolution:
 
 ```yaml
 model:
-  evolution_type: diffusion  # or wave, schrodinger
-  use_physics_constraints: true
-  constraint_weight: 0.1
+  evolution_type: diffusion  # or wave, schrodinger, spatially_varying_pde
 ```
 
 **Available Physics Types:**
 - **Diffusion**: Smooth spreading dynamics
-- **Wave**: Oscillatory propagation
+- **Wave**: Oscillatory propagation  
 - **Schrödinger**: Quantum-inspired complex evolution
+- **Spatially-varying PDE**: Adaptive coefficients based on local field properties
 
 ## 📦 Installation
 
@@ -447,137 +390,77 @@ trainer = Trainer(model, train_loader, config['training'])
 trainer.train()
 ```
 
-### Enhanced TFN with Physics Constraints
+### Enhanced TFN with Physics-Inspired Evolution
 
 ```python
 from model.tfn_enhanced import EnhancedTFNRegressor
 
-# Build enhanced model with physics-inspired evolution
+# Model with diffusion evolution and causal interference
 model = EnhancedTFNRegressor(
     input_dim=7,
     embed_dim=128,
     output_dim=1,
     output_len=24,
-    num_layers=1,
-    kernel_type="film_learnable",
+    num_layers=2,
+    kernel_type="rbf",
     evolution_type="diffusion",
     interference_type="causal",
-    use_physics_constraints=True,
-    constraint_weight=0.1
+    grid_size=100
 )
-```
 
-### Text Classification
-
-```python
-# Load IMDB sentiment analysis
-config = {
-    'data': {'dataset_name': 'imdb', 'max_length': 512},
-    'model': {
-        'task': 'classification',
-        'vocab_size': 30522,
-        'num_classes': 2,
-        'embed_dim': 128,
-        'kernel_type': 'rbf',
-        'evolution_type': 'cnn'
-    }
-}
-
-train_loader = get_dataloader(config, split='train')
-model = TFN(**config['model'])
-```
-
-### Model Registry Usage
-
-```python
-from model import registry
-
-# Get model configuration
-config = registry.get_model_config('enhanced_tfn_regressor')
-print(f"Required params: {config['required_params']}")
-print(f"Evolution types: {config['evolution_types']}")
-
-# Build model from registry
-model_params = {
-    'input_dim': 7,
-    'embed_dim': 256,
-    'output_dim': 1,
-    'output_len': 24,
-    'kernel_type': 'rbf',
-    'interference_type': 'causal'
-}
-model = registry.MODEL_REGISTRY['enhanced_tfn_regressor']['class'](**model_params)
+# The model automatically learns proper scaling for evolution and interference
+# No need to manually tune dt or interference_weight parameters
 ```
 
 ## 🧪 Testing
 
+### Unit Tests
+
+Comprehensive unit tests verify mathematical correctness:
+
 ```bash
-# Run all tests
+# Test kernel mathematical properties
+python -m pytest test/test_kernels.py -v
+
+# Test evolution mathematical properties  
+python -m pytest test/test_evolution.py -v
+
+# Test full model integration
 python test_modular_implementation.py
-
-# Test model compatibility
-python test/test_model_compatibility.py
-
-# Run with pytest (if available)
-python -m pytest test/ -v
 ```
 
-## 🛠️ Development
+### Test Coverage
 
-### Code Structure
+- **Kernel Tests**: Verify RBF, Compact, Fourier kernel properties
+- **Evolution Tests**: Test diffusion, wave, CNN evolution methods
+- **Numerical Stability**: Ensure finite outputs with extreme inputs
+- **Mathematical Properties**: Verify conservation laws and physical constraints
 
-```
-TokenFieldNetwork/
-├── core/                    # Core TFN components
-│   ├── kernels.py          # Field emission kernels
-│   ├── field_evolution.py  # Field evolution dynamics
-│   ├── field_interference.py # Field interference mechanisms
-│   ├── field_projection.py # Field projection logic
-│   ├── field_sampling.py   # Field sampling back to tokens
-│   ├── unified_field_dynamics.py # Integrated dynamics
-│   └── utils.py            # Utility functions
-├── model/                   # Model architectures
-│   ├── tfn_unified.py      # Main TFN model
-│   ├── tfn_enhanced.py     # Enhanced TFN with advanced features
-│   ├── tfn_pytorch.py      # 2D image TFN
-│   ├── baselines.py        # Baseline models
-│   ├── shared_layers.py    # Shared components (embeddings, etc.)
-│   └── registry.py         # Model registry and configuration
-├── data/                    # Data loading and processing
-├── configs/                 # Configuration files
-├── src/                     # Training infrastructure
-│   ├── trainer.py          # Training loop
-│   ├── metrics.py          # Evaluation metrics
-│   └── task_strategies.py  # Task-specific logic
-└── train.py                # Main training script
-```
+## 🔬 Research Features
 
-### Adding New Components
+### Recent Improvements
 
-1. **New Kernel**: Add to `core/kernels.py`, inherit from `KernelBasis`
-2. **New Evolution**: Add to `core/field_evolution.py`, inherit from `FieldEvolution`
-3. **New Model**: Add to `model/registry.py` with configuration
-4. **New Dataset**: Add loader to `data/` and config to `configs/`
+- **Simplified Architecture**: Removed redundant components for cleaner implementation
+- **Enhanced Numerical Stability**: Fixed unsafe parameter modifications
+- **Improved Causal Interference**: Safe, differentiable causal masking
+- **Streamlined Hyperparameters**: Let model learn scaling internally
+- **Comprehensive Testing**: Unit tests for all core mathematical functions
 
-## 🤝 Contributing
+### Key Design Principles
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/new-kernel`)
-3. Implement your changes with proper typing and docstrings
-4. Add tests for new functionality
-5. Ensure `python test_modular_implementation.py` passes
-6. Submit a pull request
+1. **Mathematical Rigor**: All components are fully differentiable
+2. **Numerical Stability**: Careful handling of tensor operations
+3. **Modular Design**: Independent, testable components
+4. **Physics-Inspired**: Leverage continuous field dynamics
+5. **Simplified Interface**: Focus on core TFN principles
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT License - see LICENSE file for details.
 
-## 🙏 Acknowledgments
+## 🤝 Contributing
 
-- Inspired by continuous field dynamics in physics
-- Built on the PyTorch ecosystem
-- Uses HuggingFace Transformers for NLP datasets
-- Implements novel field-based attention mechanisms
+We welcome contributions! Please see CONTRIBUTING.md for guidelines.
 
 ## 📖 Citation
 

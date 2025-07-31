@@ -35,12 +35,8 @@ class EnhancedTFNLayer(nn.Module):
                  interference_type: str = "standard",
                  grid_size: int = 100,
                  num_steps: int = 4,
-                 dt: float = 0.01,
                  dropout: float = 0.1,
                  *,
-                 # Physics
-                 use_physics_constraints: bool = False,
-                 constraint_weight: float = 0.1,
                  # Modular positional embeddings
                  positional_embedding_strategy: str = "learned",
                  calendar_features: Optional[list[str]] = None,
@@ -60,15 +56,12 @@ class EnhancedTFNLayer(nn.Module):
             kernel_type=kernel_type
         )
         # Unified field dynamics
-        effective_constraint_weight = constraint_weight if use_physics_constraints else 0.0
         self.unified_dynamics = UnifiedFieldDynamics(
             embed_dim=embed_dim,
             pos_dim=pos_dim,
             evolution_type=evolution_type,
             interference_type=interference_type,
             num_steps=num_steps,
-            dt=dt,
-            constraint_weight=effective_constraint_weight,
             dropout=dropout
         )
         # Field sampling
@@ -149,8 +142,6 @@ class EnhancedTFNModel(nn.Module):
                  num_heads: int = 8,
                  dropout: float = 0.1,
                  *,
-                 use_physics_constraints: bool = False,
-                 constraint_weight: float = 0.1,
                  max_seq_len: int = 512):
         """
         Initialize enhanced TFN model.
@@ -190,10 +181,12 @@ class EnhancedTFNModel(nn.Module):
                 interference_type=interference_type,
                 grid_size=grid_size,
                 num_steps=4,  # Default for UnifiedFieldDynamics
-                dt=0.01,  # Default for UnifiedFieldDynamics
                 dropout=dropout,
-                use_physics_constraints=use_physics_constraints,
-                constraint_weight=constraint_weight
+                positional_embedding_strategy="learned", # Default for EnhancedTFNLayer
+                calendar_features=None, # Default for EnhancedTFNLayer
+                feature_cardinalities={}, # Default for EnhancedTFNLayer
+                max_seq_len=max_seq_len, # Default for EnhancedTFNLayer
+                layer_norm_eps=1e-5 # Default for EnhancedTFNLayer
             )
             for _ in range(num_layers)
         ])
@@ -331,8 +324,6 @@ class EnhancedTFNRegressor(nn.Module):
                  num_heads: int = 8,
                  dropout: float = 0.1,
                  *,
-                 use_physics_constraints: bool = False,
-                 constraint_weight: float = 0.1,
                  max_seq_len: int = 512):
         """
         Initialize enhanced TFN regressor.
@@ -376,10 +367,12 @@ class EnhancedTFNRegressor(nn.Module):
                 interference_type=interference_type,
                 grid_size=grid_size,
                 num_steps=4,  # Default for UnifiedFieldDynamics
-                dt=0.01,  # Default for UnifiedFieldDynamics
                 dropout=dropout,
-                use_physics_constraints=use_physics_constraints,
-                constraint_weight=constraint_weight
+                positional_embedding_strategy="learned", # Default for EnhancedTFNLayer
+                calendar_features=None, # Default for EnhancedTFNLayer
+                feature_cardinalities={}, # Default for EnhancedTFNLayer
+                max_seq_len=max_seq_len, # Default for EnhancedTFNLayer
+                layer_norm_eps=1e-5 # Default for EnhancedTFNLayer
             )
             for _ in range(num_layers)
         ])

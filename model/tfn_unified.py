@@ -137,10 +137,7 @@ class TFN(nn.Module):
                     interference_type=interference_type,
                     grid_size=grid_size,
                     num_steps=time_steps,
-                    dt=0.01,  # Default for UnifiedFieldDynamics
                     dropout=dropout,
-                    use_physics_constraints=False,
-                    constraint_weight=0.1,
                     positional_embedding_strategy=positional_embedding_strategy,
                     calendar_features=calendar_features,
                     feature_cardinalities=feature_cardinalities,

@@ -515,112 +515,6 @@ class ModernizedCNNFieldEvolver(nn.Module):
         return field_conv.transpose(1, 2)
 
 
-class AdaptiveTimeSteppingEvolver(nn.Module):
-    """
-    Field evolution with adaptive time stepping.
-    
-    Uses a small network to predict optimal time steps based on the field's
-    current rate of change, using smaller steps during periods of high activity
-    and larger ones when the field is stable.
-    """
-    
-    def __init__(self, embed_dim: int, pos_dim: int, evolution_type: str = "diffusion",
-                 base_dt: float = 0.01, min_dt: float = 0.001, max_dt: float = 0.1,
-                 hidden_dim: int = 32):
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.pos_dim = pos_dim
-        self.evolution_type = evolution_type
-        self.base_dt = base_dt
-        self.min_dt = min_dt
-        self.max_dt = max_dt
-        self.hidden_dim = hidden_dim
-        
-        # Network to predict adaptive time steps
-        self.dt_predictor = nn.Sequential(
-            nn.Linear(1, hidden_dim),  # Input is scalar field statistics
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.GELU(),
-            nn.Linear(hidden_dim // 2, 1),
-            nn.Sigmoid()  # Output in [0, 1] range
-        )
-        
-        # Base evolution operator
-        if evolution_type == "diffusion":
-            self.base_evolver = PDEFieldEvolver(embed_dim, pos_dim, "diffusion")
-        elif evolution_type == "wave":
-            self.base_evolver = PDEFieldEvolver(embed_dim, pos_dim, "wave")
-        else:
-            raise ValueError(f"Unknown evolution type: {evolution_type}")
-        
-    def forward(self, field: torch.Tensor, 
-                grid_points: torch.Tensor,
-                time_steps: int = 1,
-                dt: float = 0.01,
-                **kwargs) -> torch.Tensor:
-        """
-        Evolve field with adaptive time stepping.
-        
-        Args:
-            field: Initial field [B, M, D]
-            grid_points: Spatial grid points [B, M, P]
-            time_steps: Number of time steps
-            dt: Base time step (unused, kept for interface)
-            **kwargs: Additional arguments
-            
-        Returns:
-            Evolved field [B, M, D]
-        """
-        batch_size, num_points, embed_dim = field.shape
-        
-        field_evolved = field.clone()
-        
-        for step in range(time_steps):
-            # Compute field rate of change (gradient magnitude)
-            if step > 0:
-                rate_of_change = torch.norm(field_evolved - field, dim=-1)  # [B, M]
-                rate_of_change = rate_of_change.mean(dim=-1, keepdim=True)  # [B, 1]
-            else:
-                # For first step, use field magnitude as proxy
-                rate_of_change = torch.norm(field_evolved, dim=-1).mean(dim=-1, keepdim=True)  # [B, 1]
-            
-            # Predict adaptive time step for each batch
-            # Use field statistics to predict dt
-            field_stats = torch.cat([
-                field_evolved.mean(dim=1),  # [B, D] mean
-                field_evolved.std(dim=1),   # [B, D] std
-                rate_of_change.expand(-1, embed_dim)  # [B, D] rate of change
-            ], dim=-1)  # [B, 3*D]
-            
-            # Reduce dimensionality for dt predictor
-            field_stats = field_stats.mean(dim=-1, keepdim=True)  # [B, 1]
-            
-            # Predict dt scaling factor
-            dt_scaling = self.dt_predictor(field_stats)  # [B, 1]
-            
-            # Scale dt: smaller steps for high activity, larger for stability
-            adaptive_dt = self.base_dt * (1.0 - 0.8 * dt_scaling)  # [B, 1]
-            adaptive_dt = torch.clamp(adaptive_dt, min=self.min_dt, max=self.max_dt)
-            
-            # Apply base evolution with per-batch adaptive dt
-            # We need to handle each batch separately since base evolver expects scalar dt
-            evolved_steps = []
-            for b in range(batch_size):
-                batch_field = field_evolved[b:b+1]  # [1, M, D]
-                batch_grid = grid_points[b:b+1] if grid_points.dim() == 3 else grid_points  # [1, M, P] or [M, P]
-                batch_dt = adaptive_dt[b].item()  # scalar dt for this batch
-                
-                batch_evolved = self.base_evolver(
-                    batch_field, batch_grid, time_steps=1, dt=batch_dt
-                )
-                evolved_steps.append(batch_evolved)
-            
-            field_evolved = torch.cat(evolved_steps, dim=0)  # [B, M, D]
-        
-        return field_evolved
-
-
 class TemporalGrid:
     """
     Time discretization for field evolution.
@@ -736,8 +630,7 @@ def create_field_evolver(embed_dim: int,
         embed_dim: Dimension of field embeddings
         pos_dim: Dimension of spatial coordinates
         evolution_type: Type of evolution ("cnn", "pde", "diffusion", "wave", "schrodinger", 
-                         "spatially_varying_pde", "modernized_cnn", "adaptive_time_stepping",
-                         "dynamic", "adaptive", "causal")
+                         "spatially_varying_pde", "modernized_cnn", "dynamic", "adaptive", "causal")
         propagator_type: DEPRECATED - Use evolution_type instead. If set, selects dynamic/adaptive/causal propagator
         interference_type: Type of interference (for dynamic types)
         **kwargs: Additional arguments
@@ -761,7 +654,7 @@ def create_field_evolver(embed_dim: int,
     elif propagator_type == "causal" or evolution_type == "causal":
         return CausalFieldPropagator(embed_dim, pos_dim, evolution_type=kwargs.get("evolution_type", "diffusion"), interference_type=interference_type, **kwargs)
     elif evolution_type in ["cnn", "pde", "diffusion", "wave", "schrodinger", 
-                           "spatially_varying_pde", "modernized_cnn", "adaptive_time_stepping"]:
+                           "spatially_varying_pde", "modernized_cnn"]:
         return FieldEvolver(embed_dim, pos_dim, evolution_type)
     else:
         raise ValueError(f"Unknown evolution/propagator type: {evolution_type} / {propagator_type}") 

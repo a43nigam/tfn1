@@ -246,82 +246,6 @@ class FourierKernel(KernelBasis):
         return kernel_values
 
 
-class LearnableKernel(KernelBasis):
-    """
-    Learnable kernel that can adapt to data.
-    
-    This kernel learns the optimal influence pattern from data,
-    providing maximum flexibility for different problems.
-    
-    Mathematical formulation:
-        K(z, μ, θ) = φ(||z - μ||, θ) where θ are learnable parameters
-    """
-    
-    def __init__(self, pos_dim: int, hidden_dim: int = 64):
-        super().__init__(pos_dim)
-        self.hidden_dim = hidden_dim
-        
-        # Learnable parameters
-        self.distance_net = nn.Sequential(
-            nn.Linear(1, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, 1),
-            nn.Sigmoid()
-        )
-        
-    def forward(self, 
-                z: torch.Tensor,           # [M, P] or [B, M, P] grid points
-                mu: torch.Tensor,          # [B, N, P] token positions
-                params: torch.Tensor) -> torch.Tensor:  # [B, N, hidden_dim] learnable params
-        """
-        Compute learnable kernel values.
-        
-        Args:
-            z: Grid point positions
-            mu: Token positions
-            params: Learnable parameters (used to condition the network)
-            
-        Returns:
-            Learnable kernel values of shape [B, N, M]
-        """
-        # Ensure z has batch dimension
-        if z.dim() == 2:
-            z = z.unsqueeze(0)  # [M, P] -> [1, M, P]
-        
-        # Compute distances: ||z - μ||
-        distances = torch.norm(z.unsqueeze(1) - mu.unsqueeze(2), dim=-1)  # [B, N, M]
-        
-        # Normalize distances to [0, 1] for the network
-        max_distance = torch.max(distances)
-        normalized_distances = distances / (max_distance + 1e-8)
-        
-        # Apply learnable transformation using params to condition the network
-        # Reshape for network: [B, N, M] -> [B*N*M, 1]
-        distances_flat = normalized_distances.reshape(-1, 1)
-        
-        # Use params to condition the network (simple approach: add params to distances)
-        # params: [B, N, hidden_dim] -> [B*N, hidden_dim]
-        params_flat = params.reshape(-1, params.shape[-1])  # [B*N, hidden_dim]
-        
-        # Expand params to match distances: [B*N, hidden_dim] -> [B*N*M, hidden_dim]
-        params_expanded = params_flat.unsqueeze(1).expand(-1, distances.shape[-1], -1)  # [B*N, M, hidden_dim]
-        params_expanded = params_expanded.reshape(-1, params.shape[-1])  # [B*N*M, hidden_dim]
-        
-        # Combine distances with params (simple concatenation)
-        # For now, just use the first dimension of params as a scaling factor
-        scaling_factor = params_expanded[:, 0:1]  # [B*N*M, 1]
-        scaled_distances = distances_flat * (1 + scaling_factor)
-        
-        # Apply network
-        kernel_values_flat = self.distance_net(scaled_distances)  # [B*N*M, 1]
-        
-        # Reshape back: [B*N*M, 1] -> [B, N, M]
-        kernel_values = kernel_values_flat.reshape(distances.shape)
-        
-        return kernel_values
-
 
 class DataDependentRBFKernel(KernelBasis):
     """
@@ -649,7 +573,7 @@ class KernelFactory:
         Create a kernel of the specified type.
         
         Args:
-            kernel_type: Type of kernel ("rbf", "compact", "fourier", "learnable", 
+            kernel_type: Type of kernel ("rbf", "compact", "fourier", 
                          "data_dependent_rbf", "data_dependent_compact", 
                          "multi_frequency_fourier", "film_learnable")
             pos_dim: Dimension of position space
@@ -664,8 +588,6 @@ class KernelFactory:
             return CompactKernel(pos_dim, **kwargs)
         elif kernel_type == "fourier":
             return FourierKernel(pos_dim, **kwargs)
-        elif kernel_type == "learnable":
-            return LearnableKernel(pos_dim, **kwargs)
         elif kernel_type == "data_dependent_rbf":
             return DataDependentRBFKernel(pos_dim, **kwargs)
         elif kernel_type == "data_dependent_compact":
@@ -680,6 +602,6 @@ class KernelFactory:
     @staticmethod
     def get_available_kernels() -> list:
         """Get list of available kernel types."""
-        return ["rbf", "compact", "fourier", "learnable", 
+        return ["rbf", "compact", "fourier", 
                 "data_dependent_rbf", "data_dependent_compact", 
                 "multi_frequency_fourier", "film_learnable"] 
