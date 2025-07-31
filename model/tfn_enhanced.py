@@ -16,7 +16,6 @@ from core.field_projection import FieldProjector
 from core.field_evolution import FieldEvolver, DynamicFieldPropagator, create_field_evolver
 from core.field_sampling import FieldSampler
 from core.field_interference import TokenFieldInterference, create_field_interference
-from core.interaction_operators import FieldInteractionOperators, create_interaction_operators
 from core.unified_field_dynamics import UnifiedFieldDynamics
 from model.shared_layers import create_positional_embedding_strategy  # NEW
 

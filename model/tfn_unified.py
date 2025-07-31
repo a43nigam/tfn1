@@ -11,8 +11,8 @@ import torch
 import torch.nn as nn
 from typing import Optional, Literal, Dict, Any, List
 
-from .tfn_base import TrainableTFNLayer
 from .tfn_enhanced import EnhancedTFNLayer
+from model.shared_layers import create_positional_embedding_strategy
 
 # Type aliases for better readability
 TaskType = Literal["classification", "regression"]
@@ -43,15 +43,14 @@ class TFN(nn.Module):
         Kernel choice for field projection ("rbf", "compact", "fourier").
     evolution_type:
         Evolution operator ("cnn", "pde", etc.).
+    interference_type:
+        Field interference type ("standard", "causal", "multi_scale").
     grid_size:
         Spatial grid resolution.
     time_steps:
         Evolution steps per layer.
     dropout:
         Dropout probability used in TFN layers & heads.
-    use_enhanced:
-        If *True*, uses :class:`EnhancedTFNLayer` instead of
-        :class:`TrainableTFNLayer`.
     positional_embedding_strategy:
         Positional embedding strategy ("learned", "time_based", "sinusoidal").
     calendar_features:
@@ -83,7 +82,6 @@ class TFN(nn.Module):
         # Positional encoding range (if positions None)
         pos_min: float = 0.1,
         pos_max: float = 0.9,
-        use_enhanced: bool = False,
         # New parameters for modular embeddings
         positional_embedding_strategy: str = "learned",
         calendar_features: Optional[List[str]] = None,
@@ -116,46 +114,26 @@ class TFN(nn.Module):
             self.input_proj = nn.Linear(input_dim, embed_dim)
 
         # ------------------------------------------------------------------
-        # TFN Layers
+        # TFN Layers using modern core components
         # ------------------------------------------------------------------
         self.tfn_layers = nn.ModuleList()
         
-        # Choose layer class based on use_enhanced flag
-        if use_enhanced:
-            layer_cls = EnhancedTFNLayer
-        else:
-            layer_cls = TrainableTFNLayer
-
         for _ in range(num_layers):
-            if use_enhanced:
-                # EnhancedTFNLayer parameters
-                layer = layer_cls(
-                    embed_dim=embed_dim,
-                    pos_dim=1,  # 1D for time series
-                    kernel_type=kernel_type,
-                    evolution_type=evolution_type,
-                    interference_type=interference_type,
-                    grid_size=grid_size,
-                    num_steps=time_steps,
-                    dropout=dropout,
-                    positional_embedding_strategy=positional_embedding_strategy,
-                    calendar_features=calendar_features,
-                    feature_cardinalities=feature_cardinalities,
-                    max_seq_len=output_len,
-                )
-            else:
-                # TrainableTFNLayer parameters
-                layer = layer_cls(
-                    embed_dim=embed_dim,
-                    kernel_type=kernel_type,
-                    evolution_type=evolution_type,
-                    grid_size=grid_size,
-                    time_steps=time_steps,
-                    dropout=dropout,
-                    positional_embedding_strategy=positional_embedding_strategy,
-                    calendar_features=calendar_features,
-                    feature_cardinalities=feature_cardinalities
-                )
+            # Use EnhancedTFNLayer which uses modern core components
+            layer = EnhancedTFNLayer(
+                embed_dim=embed_dim,
+                pos_dim=1,  # 1D for time series
+                kernel_type=kernel_type,
+                evolution_type=evolution_type,
+                interference_type=interference_type,
+                grid_size=grid_size,
+                num_steps=time_steps,
+                dropout=dropout,
+                positional_embedding_strategy=positional_embedding_strategy,
+                calendar_features=calendar_features,
+                feature_cardinalities=feature_cardinalities,
+                max_seq_len=output_len,
+            )
             self.tfn_layers.append(layer)
 
         # ------------------------------------------------------------------
@@ -223,12 +201,8 @@ class TFN(nn.Module):
         # ------------------------------------------------------------------
         x = embeddings
         for layer in self.tfn_layers:
-            if isinstance(layer, TrainableTFNLayer):
-                # Pass calendar features to TrainableTFNLayer
-                x = layer(x, positions, calendar_features=calendar_features)
-            else:
-                # EnhancedTFNLayer doesn't need calendar_features
-                x = layer(x, positions)
+            # EnhancedTFNLayer uses modern core components
+            x = layer(x, positions)
 
         # ------------------------------------------------------------------
         # Task-Specific Head

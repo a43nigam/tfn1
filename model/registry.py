@@ -10,7 +10,10 @@ from typing import Dict, List, Any, Optional
 from .tfn_unified import TFN, UnifiedTFN
 from .tfn_enhanced import EnhancedTFNModel, EnhancedTFNRegressor
 from .tfn_pytorch import ImageTFN
-from .baselines import TransformerBaseline, PerformerBaseline, LSTMBaseline, CNNBaseline
+from .baselines import (
+    TransformerBaseline, PerformerBaseline, LSTMBaseline, CNNBaseline,
+    RoBERTaBaseline, InformerBaseline, TCNBaseline
+)
 from .seq_baselines import TFNSeqModel, SimpleTransformerSeqModel, SimplePerformerSeqModel
 
 # Model Registry with all parameters and evolution types
@@ -22,11 +25,11 @@ MODEL_REGISTRY = {
     'tfn_classifier': {
         'class': TFN,
         'task_type': 'classification',
-        'evolution_types': ['cnn', 'pde'],
-        'components': ['field_projection', 'field_evolution', 'field_sampling'],
+        'evolution_types': ['cnn', 'pde', 'diffusion', 'wave', 'schrodinger', 'spatially_varying_pde'],
+        'components': ['field_projection', 'field_evolution', 'field_interference', 'field_sampling'],
         'required_params': ['vocab_size', 'embed_dim', 'num_classes', 'kernel_type', 'evolution_type'],
         'optional_params': [
-            'num_layers', 'grid_size', 'time_steps', 'dropout', 'use_enhanced', 'interference_type',
+            'num_layers', 'grid_size', 'time_steps', 'dropout', 'interference_type',
             'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities', 'max_seq_len'
         ],
         'defaults': {
@@ -36,7 +39,6 @@ MODEL_REGISTRY = {
             'grid_size': 100,
             'time_steps': 3,
             'dropout': 0.1,
-            'use_enhanced': False,
             'interference_type': 'standard'
         }
     },
@@ -44,10 +46,10 @@ MODEL_REGISTRY = {
     'tfn_regressor': {
         'class': TFN,
         'task_type': 'regression',
-        'evolution_types': ['cnn', 'pde'],
-        'components': ['field_projection', 'field_evolution', 'field_sampling'],
+        'evolution_types': ['cnn', 'pde', 'diffusion', 'wave', 'schrodinger', 'spatially_varying_pde'],
+        'components': ['field_projection', 'field_evolution', 'field_interference', 'field_sampling'],
         'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len', 'kernel_type', 'evolution_type'],
-        'optional_params': ['num_layers', 'grid_size', 'time_steps', 'dropout', 'use_enhanced', 'interference_type'],
+        'optional_params': ['num_layers', 'grid_size', 'time_steps', 'dropout', 'interference_type'],
         'defaults': {
             'num_layers': 2,
             'kernel_type': 'rbf',
@@ -55,7 +57,6 @@ MODEL_REGISTRY = {
             'grid_size': 100,
             'time_steps': 3,
             'dropout': 0.1,
-            'use_enhanced': False,
             'interference_type': 'standard'
         }
     },
@@ -248,6 +249,54 @@ MODEL_REGISTRY = {
         }
     },
     
+    # SOTA Baselines for NLP
+    'roberta_classifier': {
+        'class': RoBERTaBaseline,
+        'task_type': 'classification',
+        'evolution_types': [],
+        'components': ['roberta_encoder', 'classification_head'],
+        'required_params': ['vocab_size', 'embed_dim', 'num_classes'],
+        'optional_params': ['seq_len', 'num_layers', 'num_heads', 'dropout', 'layer_norm_eps'],
+        'defaults': {
+            'seq_len': 512,
+            'num_layers': 6,
+            'num_heads': 8,
+            'dropout': 0.1,
+            'layer_norm_eps': 1e-5
+        }
+    },
+    
+    # SOTA Baselines for Time Series
+    'informer_regressor': {
+        'class': InformerBaseline,
+        'task_type': 'regression',
+        'evolution_types': [],
+        'components': ['informer_encoder', 'regression_head'],
+        'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len'],
+        'optional_params': ['seq_len', 'num_layers', 'num_heads', 'dropout', 'factor'],
+        'defaults': {
+            'seq_len': 512,
+            'num_layers': 2,
+            'num_heads': 8,
+            'dropout': 0.1,
+            'factor': 5
+        }
+    },
+    
+    'tcn_regressor': {
+        'class': TCNBaseline,
+        'task_type': 'regression',
+        'evolution_types': [],
+        'components': ['tcn_encoder', 'regression_head'],
+        'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len'],
+        'optional_params': ['num_channels', 'kernel_size', 'dropout'],
+        'defaults': {
+            'num_channels': [64, 128, 256],
+            'kernel_size': 3,
+            'dropout': 0.1
+        }
+    },
+    
     'transformer_regressor': {
         'class': TransformerBaseline,
         'task_type': 'regression',
@@ -342,17 +391,17 @@ MODEL_REGISTRY = {
 TASK_COMPATIBILITY = {
     'classification': {
         'models': ['tfn_classifier', 'enhanced_tfn_classifier', 'transformer_classifier', 
-                  'performer_classifier', 'lstm_classifier', 'cnn_classifier'],
+                  'performer_classifier', 'lstm_classifier', 'cnn_classifier', 'roberta_classifier'],
         'datasets': ['sst2', 'mrpc', 'qqp', 'qnli', 'rte', 'cola', 'wnli', 'arxiv']
     },
     'regression': {
         'models': ['tfn_regressor', 'enhanced_tfn_regressor', 'transformer_regressor', 
-                  'performer_regressor', 'lstm_regressor', 'cnn_regressor'],
+                  'performer_regressor', 'lstm_regressor', 'cnn_regressor', 'informer_regressor', 'tcn_regressor'],
         'datasets': ['stsb']
     },
     'time_series': {
-        'models': ['tfn_timeseries_regressor', 'tfn_multistep_regressor', 'tfn_sequence_regressor',
-                  'transformer_regressor', 'performer_regressor', 'lstm_regressor', 'cnn_regressor'],
+        'models': ['tfn_regressor', 'enhanced_tfn_regressor', 'transformer_regressor', 
+                  'performer_regressor', 'lstm_regressor', 'cnn_regressor', 'informer_regressor', 'tcn_regressor'],
         'datasets': ['electricity', 'jena', 'jena_multi']
     },
     'language_modeling': {

@@ -7,11 +7,23 @@ from src import metrics
 from src.flops_tracker import create_flops_tracker, log_flops_stats
 from src.task_strategies import TaskStrategy
 import math
+import os
+import json
+from datetime import datetime
+
+# Optional wandb import for experiment tracking
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("Warning: wandb not available. Install with 'pip install wandb' for experiment tracking.")
 
 class Trainer:
     """
     Universal Trainer using the Strategy design pattern for task-specific logic.
     Handles device, optimizer, scheduler, loss, metrics, and robust batch formats.
+    Enhanced with comprehensive experiment tracking.
     """
     def __init__(
         self,
@@ -28,6 +40,13 @@ class Trainer:
         log_interval: int = 100,
         warmup_epochs: int = 1,
         track_flops: bool = False,
+        # Experiment tracking parameters
+        experiment_name: Optional[str] = None,
+        project_name: str = "tfn-experiments",
+        use_wandb: bool = False,
+        save_checkpoints: bool = True,
+        checkpoint_dir: str = "checkpoints",
+        log_hyperparams: bool = True,
     ) -> None:
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -39,7 +58,28 @@ class Trainer:
         self.grad_clip = grad_clip
         self.log_interval = log_interval
         self.track_flops = track_flops
-        self.history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": [], "train_mse": [], "val_mse": [], "train_mae": [], "val_mae": [], "learning_rates": []}
+        
+        # Experiment tracking
+        self.experiment_name = experiment_name or f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.project_name = project_name
+        self.use_wandb = use_wandb and WANDB_AVAILABLE
+        self.save_checkpoints = save_checkpoints
+        self.checkpoint_dir = checkpoint_dir
+        self.log_hyperparams = log_hyperparams
+        
+        # Create checkpoint directory
+        if self.save_checkpoints:
+            os.makedirs(self.checkpoint_dir, exist_ok=True)
+        
+        # Initialize wandb if requested
+        if self.use_wandb:
+            self._init_wandb()
+        
+        self.history = {
+            "train_loss": [], "val_loss": [], "train_acc": [], "val_acc": [], 
+            "train_mse": [], "val_mse": [], "train_mae": [], "val_mae": [], 
+            "learning_rates": [], "epochs": []
+        }
 
         # Get the scaler from the training dataset for denormalization during evaluation
         self.scaler = getattr(train_loader.dataset, 'scaler', None)
@@ -59,8 +99,100 @@ class Trainer:
         
         # The strategy provides the loss function
         self.criterion = self.strategy.get_criterion() if self.strategy else torch.nn.MSELoss()
+        
+        # Store hyperparameters for logging
+        self.hyperparams = {
+            'lr': lr,
+            'weight_decay': weight_decay,
+            'epochs': epochs,
+            'grad_clip': grad_clip,
+            'warmup_epochs': warmup_epochs,
+            'track_flops': track_flops,
+            'device': str(device),
+            'model_name': model.__class__.__name__,
+            'num_params': sum(p.numel() for p in model.parameters()),
+            'trainable_params': sum(p.numel() for p in model.parameters() if p.requires_grad),
+        }
+        
+        # Add model-specific hyperparameters
+        if hasattr(model, 'embed_dim'):
+            self.hyperparams['embed_dim'] = model.embed_dim
+        if hasattr(model, 'num_layers'):
+            self.hyperparams['num_layers'] = model.num_layers
+        if hasattr(model, 'kernel_type'):
+            self.hyperparams['kernel_type'] = model.kernel_type
+        if hasattr(model, 'evolution_type'):
+            self.hyperparams['evolution_type'] = model.evolution_type
 
+    def _init_wandb(self):
+        """Initialize Weights & Biases experiment tracking."""
+        if not WANDB_AVAILABLE:
+            print("Warning: wandb not available. Skipping wandb initialization.")
+            return
+            
+        wandb.init(
+            project=self.project_name,
+            name=self.experiment_name,
+            config=self.hyperparams,
+            tags=["tfn", "deep-learning", "field-networks"]
+        )
+        
+        # Log model architecture
+        if hasattr(self.model, 'named_modules'):
+            model_summary = []
+            for name, module in self.model.named_modules():
+                if len(list(module.children())) == 0:  # Leaf modules only
+                    model_summary.append({
+                        'name': name,
+                        'type': module.__class__.__name__,
+                        'parameters': sum(p.numel() for p in module.parameters())
+                    })
+            wandb.log({"model_architecture": wandb.Table(
+                columns=["name", "type", "parameters"],
+                data=[[m['name'], m['type'], m['parameters']] for m in model_summary]
+            )})
 
+    def _log_metrics(self, epoch: int, metrics: Dict[str, float], step: str = "epoch"):
+        """Log metrics to wandb and console."""
+        # Add epoch to metrics
+        metrics['epoch'] = epoch
+        
+        # Log to wandb
+        if self.use_wandb:
+            wandb.log(metrics, step=epoch)
+        
+        # Log to console
+        metric_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items() if k != 'epoch'])
+        print(f"Epoch {epoch:02d} | {step.capitalize()} | {metric_str}")
+
+    def _save_checkpoint(self, epoch: int, metrics: Dict[str, float], is_best: bool = False):
+        """Save model checkpoint."""
+        if not self.save_checkpoints:
+            return
+            
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+            'metrics': metrics,
+            'hyperparams': self.hyperparams,
+            'history': self.history
+        }
+        
+        # Save regular checkpoint
+        checkpoint_path = os.path.join(self.checkpoint_dir, f"{self.experiment_name}_epoch_{epoch}.pt")
+        torch.save(checkpoint, checkpoint_path)
+        
+        # Save best checkpoint if this is the best so far
+        if is_best:
+            best_path = os.path.join(self.checkpoint_dir, f"{self.experiment_name}_best.pt")
+            torch.save(checkpoint, best_path)
+            print(f"New best model saved to {best_path}")
+        
+        # Save latest checkpoint
+        latest_path = os.path.join(self.checkpoint_dir, f"{self.experiment_name}_latest.pt")
+        torch.save(checkpoint, latest_path)
 
     def _build_scheduler(self, lr: float, warmup_epochs: int):
         total_steps = self.epochs * len(self.train_loader)
@@ -97,8 +229,6 @@ class Trainer:
         else:
             raise ValueError(f"Unknown batch format: keys {list(batch.keys())}")
 
-
-
     def _fmt(self, val):
         return f"{val:.4f}" if val is not None else "N/A"
 
@@ -108,11 +238,27 @@ class Trainer:
         num_params = sum(p.numel() for p in self.model.parameters())
         print(f"Model: {model_name} | Total parameters: {num_params:,}")
         
+        # Log hyperparameters
+        if self.log_hyperparams:
+            print("\nHyperparameters:")
+            for key, value in self.hyperparams.items():
+                print(f"  {key}: {value}")
+            print()
+        
+        # Track best validation metrics
+        best_val_loss = float('inf')
+        best_val_acc = 0.0
+        best_val_mse = float('inf')
+        best_val_mae = float('inf')
+        
         # Track learning rates for each epoch
         learning_rates = []
         
         for epoch in range(1, self.epochs + 1):
+            # Training phase
             train_loss, train_acc, train_mse, train_mae = self._run_epoch(self.train_loader, train=True)
+            
+            # Validation phase
             val_loss, val_acc, val_mse, val_mae = (None, None, None, None)
             if self.val_loader is not None:
                 val_loss, val_acc, val_mse, val_mae = self._run_epoch(self.val_loader, train=False)
@@ -121,6 +267,7 @@ class Trainer:
             current_lr = self.optimizer.param_groups[0]['lr']
             learning_rates.append(current_lr)
             
+            # Update history
             self.history["train_loss"].append(train_loss)
             self.history["val_loss"].append(val_loss)
             self.history["train_acc"].append(train_acc)
@@ -130,12 +277,41 @@ class Trainer:
             self.history["train_mae"].append(train_mae)
             self.history["val_mae"].append(val_mae)
             self.history["learning_rates"].append(current_lr)
+            self.history["epochs"].append(epoch)
             
-            print(f"Epoch {epoch:02d} | Train Loss: {self._fmt(train_loss)} | Val Loss: {self._fmt(val_loss)} | "
-                  f"Train Acc: {self._fmt(train_acc)} | Val Acc: {self._fmt(val_acc)} | "
-                  f"Train MSE: {self._fmt(train_mse)} | Val MSE: {self._fmt(val_mse)} | "
-                  f"Train MAE: {self._fmt(train_mae)} | Val MAE: {self._fmt(val_mae)} | "
-                  f"LR: {current_lr:.6f}")
+            # Prepare metrics for logging
+            metrics = {
+                'train_loss': train_loss,
+                'val_loss': val_loss,
+                'train_acc': train_acc,
+                'val_acc': val_acc,
+                'train_mse': train_mse,
+                'val_mse': val_mse,
+                'train_mae': train_mae,
+                'val_mae': val_mae,
+                'learning_rate': current_lr
+            }
+            
+            # Log metrics
+            self._log_metrics(epoch, metrics)
+            
+            # Check for best model
+            is_best = False
+            if val_loss is not None and val_loss < best_val_loss:
+                best_val_loss = val_loss
+                is_best = True
+            if val_acc is not None and val_acc > best_val_acc:
+                best_val_acc = val_acc
+                is_best = True
+            if val_mse is not None and val_mse < best_val_mse:
+                best_val_mse = val_mse
+                is_best = True
+            if val_mae is not None and val_mae < best_val_mae:
+                best_val_mae = val_mae
+                is_best = True
+            
+            # Save checkpoint
+            self._save_checkpoint(epoch, metrics, is_best)
             
             # Step the scheduler
             if hasattr(self, 'scheduler'):
@@ -150,6 +326,23 @@ class Trainer:
             print("="*50)
             log_flops_stats(flops_stats, prefix="  ")
             self.history["flops_stats"] = flops_stats
+            
+            # Log FLOPS to wandb
+            if self.use_wandb:
+                wandb.log({"flops_stats": wandb.Table(
+                    columns=["layer", "flops", "params"],
+                    data=[[layer, stats['flops'], stats['params']] 
+                          for layer, stats in flops_stats.items()]
+                )})
+        
+        # Final logging
+        if self.use_wandb:
+            wandb.finish()
+        
+        # Save final history
+        history_path = os.path.join(self.checkpoint_dir, f"{self.experiment_name}_history.json")
+        with open(history_path, 'w') as f:
+            json.dump(self.history, f, indent=2)
         
         return self.history
 
@@ -191,6 +384,12 @@ class Trainer:
                     total_metrics[key] = 0.0
                 total_metrics[key] += value
             n_batches += 1
+            
+            # Log batch metrics to wandb if enabled
+            if self.use_wandb and batch_idx % self.log_interval == 0:
+                batch_metrics_log = {f"batch_{k}": v for k, v in batch_metrics.items()}
+                batch_metrics_log['batch_loss'] = loss.item()
+                wandb.log(batch_metrics_log)
         
         # Calculate averages
         avg_loss = total_loss / n_batches if n_batches > 0 else None
@@ -204,6 +403,16 @@ class Trainer:
         avg_mae = avg_metrics.get("mae", None)
         
         return avg_loss, avg_acc, avg_mse, avg_mae
+
+    def load_checkpoint(self, checkpoint_path: str):
+        """Load model from checkpoint."""
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if checkpoint['scheduler_state_dict'] and self.scheduler:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        self.history = checkpoint['history']
+        return checkpoint['epoch'], checkpoint['metrics']
 
 if __name__ == "__main__":
     print("Trainer class ready for use. Run via train.py.") 
