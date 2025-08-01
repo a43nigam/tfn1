@@ -123,7 +123,6 @@ MODEL_REGISTRY = {
             'num_layers', 'evolution_type', 'grid_size', 'num_heads', 'dropout',
             'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities', 'max_seq_len'
         ],
-        'physics_params': ['use_physics_constraints', 'constraint_weight'],
         'defaults': {
             'num_layers': 2,
             'kernel_type': 'rbf',
@@ -131,9 +130,7 @@ MODEL_REGISTRY = {
             'interference_type': 'standard',
             'grid_size': 100,
             'num_heads': 8,
-            'dropout': 0.1,
-            'use_physics_constraints': False,
-            'constraint_weight': 0.1
+            'dropout': 0.1
         }
     },
     
@@ -147,7 +144,6 @@ MODEL_REGISTRY = {
             'num_layers', 'evolution_type', 'grid_size', 'num_heads', 'dropout',
             'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities', 'max_seq_len'
         ],
-        'physics_params': ['use_physics_constraints', 'constraint_weight'],
         'defaults': {
             'num_layers': 1,
             'kernel_type': 'film_learnable',
@@ -155,9 +151,7 @@ MODEL_REGISTRY = {
             'interference_type': 'causal',
             'grid_size': 100,
             'num_heads': 8,
-            'dropout': 0.1,
-            'use_physics_constraints': False,
-            'constraint_weight': 0.1
+            'dropout': 0.1
         }
     },
     
@@ -171,7 +165,6 @@ MODEL_REGISTRY = {
             'pos_dim', 'evolution_type', 'grid_size', 'num_heads', 'dropout', 'max_seq_len',
             'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities'
         ],
-        'physics_params': ['use_physics_constraints', 'constraint_weight'],
         'defaults': {
             'pos_dim': 1,
             'kernel_type': 'rbf',
@@ -180,9 +173,7 @@ MODEL_REGISTRY = {
             'grid_size': 100,
             'num_heads': 8,
             'dropout': 0.1,
-            'max_seq_len': 512,
-            'use_physics_constraints': False,
-            'constraint_weight': 0.1
+            'max_seq_len': 512
         }
     },
     
@@ -451,10 +442,7 @@ def get_optional_params(model_name: str) -> List[str]:
     config = get_model_config(model_name)
     return config.get('optional_params', [])
 
-def get_physics_params(model_name: str) -> List[str]:
-    """Get physics parameters for a model."""
-    config = get_model_config(model_name)
-    return config.get('physics_params', [])
+
 
 def get_model_defaults(model_name: str) -> Dict[str, Any]:
     """Get default parameters for a model."""

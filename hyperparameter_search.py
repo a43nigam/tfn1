@@ -517,6 +517,13 @@ class HyperparameterSearch:
         else:
             lr = training_config.get('lr', 1e-3)
         
+        # Ensure lr is float (handle string values from YAML)
+        if isinstance(lr, str):
+            try:
+                lr = float(lr)
+            except ValueError:
+                raise ValueError(f"Invalid learning rate value: {lr!r}")
+        
         weight_decay = training_config.get('weight_decay', 0.0)
         
         # Create strategy for this trial
@@ -532,12 +539,12 @@ class HyperparameterSearch:
             test_loader=test_loader,
             strategy=strategy,  # Use strategy instead of task string
             device=training_config.get('device', 'cpu'),
-            lr=lr,
-            weight_decay=weight_decay,
-            epochs=training_config.get('epochs', 10),
-            grad_clip=training_config.get('grad_clip', 1.0),
-            log_interval=training_config.get('log_interval', 100),
-            warmup_epochs=training_config.get('warmup_epochs', 2),
+            lr=float(lr),  # Ensure lr is float
+            weight_decay=float(weight_decay),  # Ensure weight_decay is float
+            epochs=int(training_config.get('epochs', 10)),  # Ensure epochs is int
+            grad_clip=float(training_config.get('grad_clip', 1.0)),  # Ensure grad_clip is float
+            log_interval=int(training_config.get('log_interval', 100)),  # Ensure log_interval is int
+            warmup_epochs=int(training_config.get('warmup_epochs', 2)),  # Ensure warmup_epochs is int
             track_flops=True  # Enable FLOPs tracking for hyperparameter search
         )
         
