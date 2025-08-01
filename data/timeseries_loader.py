@@ -68,18 +68,30 @@ class InstanceNormalizer(NormalizationStrategy):
         pass
     
     def transform(self, data: np.ndarray) -> np.ndarray:
-        """Normalize each sample individually (mean=0, std=1)."""
-        if data.ndim == 1:
-            data = data.reshape(-1, 1)
+        """Normalize each sample individually (mean=0, std=1).
         
-        # Compute mean and std for each sample
-        mean = np.mean(data, axis=0, keepdims=True)
-        std = np.std(data, axis=0, keepdims=True)
+        Args:
+            data: Array of shape [num_samples, num_features] or [num_samples, seq_len, num_features]
         
-        # Avoid division by zero
-        std = np.where(std == 0, 1.0, std)
-        
-        return (data - mean) / std
+        Returns:
+            Normalized data with same shape as input
+        """
+        if data.ndim == 2:
+            # Handle [num_samples, num_features] - normalize each sample
+            mean = np.mean(data, axis=1, keepdims=True)
+            std = np.std(data, axis=1, keepdims=True)
+            # Avoid division by zero
+            std = np.where(std == 0, 1.0, std)
+            return (data - mean) / std
+        elif data.ndim == 3:
+            # Handle [num_samples, seq_len, num_features] - normalize each sample across time
+            mean = np.mean(data, axis=(1, 2), keepdims=True)
+            std = np.std(data, axis=(1, 2), keepdims=True)
+            # Avoid division by zero
+            std = np.where(std == 0, 1.0, std)
+            return (data - mean) / std
+        else:
+            raise ValueError(f"InstanceNormalizer expects 2D or 3D data, got {data.ndim}D")
     
     def inverse_transform(self, data: np.ndarray) -> np.ndarray:
         """Instance normalization is not easily invertible - return as-is."""
@@ -157,20 +169,6 @@ class ETTDataset(Dataset):
         total_len = self.input_len + self.output_len
         return [i for i in range(len(self.data) - total_len + 1)]
 
-    def _normalize_instance(self, x: np.ndarray) -> np.ndarray:
-        """Apply instance normalization to a single sample."""
-        if x.ndim == 1:
-            x = x.reshape(-1, 1)
-        
-        # Compute mean and std for this instance
-        mean = np.mean(x, axis=0, keepdims=True)
-        std = np.std(x, axis=0, keepdims=True)
-        
-        # Avoid division by zero
-        std = np.where(std == 0, 1.0, std)
-        
-        return (x - mean) / std
-
     def __len__(self) -> int:
         return len(self.indices)
 
@@ -179,9 +177,8 @@ class ETTDataset(Dataset):
         x = self.data[i : i + self.input_len]  # [input_len, input_dim]
         y = self.data[i + self.input_len : i + self.input_len + self.output_len, self.target_col]  # [output_len]
         
-        # Apply instance normalization if enabled
-        if self.instance_normalize:
-            x = self._normalize_instance(x)
+        # Instance normalization is now applied in get_splits for efficiency
+        # No need to apply it here anymore
         
         # If output is 1D, add feature dim
         if y.ndim == 1:
@@ -264,8 +261,17 @@ class ETTDataset(Dataset):
             val_data = normalizer.transform(val_data)
             test_data = normalizer.transform(test_data)
         elif normalization_strategy == "instance":
-            # Instance normalization is applied in __getitem__, no preprocessing needed
-            pass
+            # Step 1: Vectorize instance normalization - apply to entire dataset splits
+            train_data = normalizer.transform(train_data)
+            val_data = normalizer.transform(val_data)
+            test_data = normalizer.transform(test_data)
+        
+        # Apply additional instance normalization if requested (for backward compatibility)
+        if instance_normalize and normalization_strategy != "instance":
+            instance_normalizer = InstanceNormalizer()
+            train_data = instance_normalizer.transform(train_data)
+            val_data = instance_normalizer.transform(val_data)
+            test_data = instance_normalizer.transform(test_data)
         
         # Build datasets
         train_ds = ETTDataset(train_data, input_len, output_len, target_col=target_idx, 

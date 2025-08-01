@@ -119,10 +119,8 @@ class RegressionStrategy(TaskStrategy):
         y_flat = targets.view(targets.size(0), -1)
         preds_flat = preds.view(preds.size(0), -1)
         
-        # Denormalize predictions and targets for metric calculation if scaler exists
-        # Apply denormalization consistently for both training and validation
+        # Step 4: Add explicit checks and warnings for scaler availability
         if scaler is not None:
-            
             # Get the mean and std for the target column ONLY
             mean = scaler.mean_[target_col_idx]
             std = scaler.scale_[target_col_idx]
@@ -136,7 +134,15 @@ class RegressionStrategy(TaskStrategy):
             mse_val = metrics.mse(preds_denorm, y_denorm)
             mae_val = metrics.mae(preds_denorm, y_denorm)
         else:
-            # Calculate metrics on normalized scale
+            # If no scaler is found, warn the user and calculate on the current scale
+            import warnings
+            warnings.warn(
+                "Scaler not found. Calculating regression metrics (MSE, MAE) on potentially normalized data. "
+                "These values may not reflect the true error scale. "
+                "To get meaningful metrics, ensure the dataset provides a scaler object.",
+                UserWarning,
+                stacklevel=2
+            )
             mse_val = metrics.mse(preds_flat, y_flat)
             mae_val = metrics.mae(preds_flat, y_flat)
             

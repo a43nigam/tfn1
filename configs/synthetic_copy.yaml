@@ -2,6 +2,8 @@ data:
   seq_len: 50
   dataset_size: 10000
   pad_idx: 0
+  task: classification
+  num_classes: 2
 model:
   vocab_size: 20
   embed_dim: 128

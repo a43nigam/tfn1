@@ -38,6 +38,7 @@ class TrialResult:
     trial_id: str
     model_name: str
     parameters: Dict[str, Any]
+    status: str  # 'completed', 'failed'
     start_time: str
     end_time: str
     duration_seconds: float
@@ -59,6 +60,7 @@ class TrialResult:
     final_val_mae: float
     training_history: List[Dict[str, Any]]
     flops_stats: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None  # For failed trials
 
 
 class SearchSpace:
@@ -147,11 +149,39 @@ class ResultsLogger:
             self.summary["best_trial"] = trial_summary
     
     def save_summary(self) -> None:
-        """Save the search summary."""
-        self.summary["search_end_time"] = datetime.now().isoformat()
-        summary_file = os.path.join(self.output_dir, "summary.json")
-        with open(summary_file, 'w') as f:
-            json.dump(self.summary, f, indent=2, default=str)
+        """Save a summary of all trials."""
+        summary = {
+            "total_trials": len(self.trials),
+            "successful_trials": len([t for t in self.trials if t.get('status') == 'completed']),
+            "failed_trials": len([t for t in self.trials if t.get('status') == 'failed']),
+            "trials": self.trials
+        }
+        
+        # Add failed trial details for debugging
+        failed_trials = [t for t in self.trials if t.get('status') == 'failed']
+        if failed_trials:
+            summary["failed_trial_details"] = [
+                {
+                    "trial_id": t.get('trial_id'),
+                    "model_name": t.get('model_name'),
+                    "parameters": t.get('parameters'),
+                    "error_message": t.get('error_message', 'Unknown error')
+                }
+                for t in failed_trials
+            ]
+        
+        with open(os.path.join(self.output_dir, "summary.json"), "w") as f:
+            json.dump(summary, f, indent=2)
+        
+        # Print summary to console
+        print(f"\nSearch Summary:")
+        print(f"  Total trials: {summary['total_trials']}")
+        print(f"  Successful: {summary['successful_trials']}")
+        print(f"  Failed: {summary['failed_trials']}")
+        if summary['failed_trials'] > 0:
+            print(f"  Failed trials:")
+            for failed in summary.get('failed_trial_details', []):
+                print(f"    - {failed['trial_id']} ({failed['model_name']}): {failed['error_message']}")
     
     def save_search_config(self, config: Dict[str, Any]) -> None:
         """Save the search configuration."""
@@ -249,6 +279,7 @@ class Trial:
             trial_id=self.trial_id,
             model_name=self.model_name,
             parameters=self.parameters,
+            status='completed',
             start_time=self.start_time.isoformat(),
             end_time=end_time.isoformat(),
             duration_seconds=duration,
@@ -337,43 +368,71 @@ class HyperparameterSearch:
         self.logger.save_search_config(search_config)
     
     def _parse_param_config(self, param_config: Dict[str, Any]) -> Dict[str, List[Any]]:
-        """Parse parameter configuration from YAML into sweep format."""
+        """
+        Parse parameter configuration from YAML into sweep format.
+        
+        Supports both old flat format and new scoped format:
+        
+        Old format:
+        params:
+          model.embed_dim: [128, 256, 512]
+          training.lr: {logspace: [0.0001, 0.01], steps: 5}
+        
+        New scoped format:
+        params:
+          model:
+            embed_dim: [128, 256, 512]
+            num_layers: [2, 4, 6]
+          training:
+            lr: {logspace: [0.0001, 0.01], steps: 5}
+            batch_size: [16, 32, 64]
+        """
         param_sweep = {}
         
-        for param_name, param_def in param_config.items():
-            if isinstance(param_def, dict):
-                if "values" in param_def:
-                    # Direct value list: model.embed_dim: {values: [128, 256, 512]}
-                    param_sweep[param_name] = param_def["values"]
-                elif "range" in param_def:
-                    # Range specification: training.lr: {range: [0.0001, 0.01], steps: 5}
-                    start, end = param_def["range"]
-                    steps = param_def.get("steps", 3)
-                    if param_def.get("log_scale", False):
-                        import numpy as np
-                        param_sweep[param_name] = np.logspace(
-                            np.log10(start), np.log10(end), steps
-                        ).tolist()
-                    else:
-                        import numpy as np
-                        param_sweep[param_name] = np.linspace(start, end, steps).tolist()
-                elif "logspace" in param_def:
-                    # Logarithmic range: training.lr: {logspace: [0.0001, 0.01], steps: 5}
-                    start, end = param_def["logspace"]
-                    steps = param_def.get("steps", 3)
-                    import numpy as np
-                    param_sweep[param_name] = np.logspace(
-                        np.log10(start), np.log10(end), steps
-                    ).tolist()
-                else:
-                    raise ValueError(f"Unknown parameter definition for {param_name}: {param_def}")
-            elif isinstance(param_def, list):
-                # Direct list: model.kernel_type: [rbf, compact, fourier]
-                param_sweep[param_name] = param_def
-            else:
-                raise ValueError(f"Invalid parameter definition for {param_name}: {param_def}")
+        # Check if this is the new scoped format
+        if any(isinstance(v, dict) and not any(key in v for key in ['values', 'range', 'logspace']) 
+               for v in param_config.values()):
+            # New scoped format
+            for scope, scope_params in param_config.items():
+                for param_name, param_def in scope_params.items():
+                    full_param_name = f"{scope}.{param_name}"
+                    param_sweep[full_param_name] = self._parse_param_definition(param_def)
+        else:
+            # Old flat format - maintain backward compatibility
+            for param_name, param_def in param_config.items():
+                param_sweep[param_name] = self._parse_param_definition(param_def)
         
         return param_sweep
+    
+    def _parse_param_definition(self, param_def: Any) -> List[Any]:
+        """Parse a single parameter definition into a list of values."""
+        if isinstance(param_def, dict):
+            if "values" in param_def:
+                # Direct value list: {values: [128, 256, 512]}
+                return param_def["values"]
+            elif "range" in param_def:
+                # Range specification: {range: [0.0001, 0.01], steps: 5}
+                start, end = param_def["range"]
+                steps = param_def.get("steps", 3)
+                if param_def.get("log_scale", False):
+                    import numpy as np
+                    return np.logspace(np.log10(start), np.log10(end), steps).tolist()
+                else:
+                    import numpy as np
+                    return np.linspace(start, end, steps).tolist()
+            elif "logspace" in param_def:
+                # Logarithmic range: {logspace: [0.0001, 0.01], steps: 5}
+                start, end = param_def["logspace"]
+                steps = param_def.get("steps", 3)
+                import numpy as np
+                return np.logspace(np.log10(start), np.log10(end), steps).tolist()
+            else:
+                raise ValueError(f"Unknown parameter definition: {param_def}")
+        elif isinstance(param_def, list):
+            # Direct list: [128, 256, 512]
+            return param_def
+        else:
+            raise ValueError(f"Invalid parameter definition: {param_def}")
     
     def run_search(self) -> None:
         """Run the complete hyperparameter search."""
@@ -383,6 +442,8 @@ class HyperparameterSearch:
         print("-" * 80)
         
         trial_counter = 1
+        successful_trials = 0
+        failed_trials = 0
         
         for model_name in self.models:
             print(f"\nSearching model: {model_name}")
@@ -396,9 +457,11 @@ class HyperparameterSearch:
                     print(f"  {param}: {value}")
                 print("  Training progress:")
                 
+                # Step 4: Implement resilient trial execution
                 try:
                     result = self._run_trial(trial_id, model_name, parameters)
                     self.logger.log_trial(result)
+                    successful_trials += 1
                     
                     print(f"  ✓ Completed in {result.duration_seconds:.1f}s")
                     print(f"  ✓ Best val_loss: {result.best_val_loss:.4f} (epoch {result.best_epoch})")
@@ -409,12 +472,20 @@ class HyperparameterSearch:
                         print(f"  ✓ Completed all {result.epochs_completed} epochs")
                 
                 except Exception as e:
-                    print(f"  Trial failed: {str(e)}")
-                    # Log failed trial with all required fields
+                    failed_trials += 1
+                    print(f"  ❌ TRIAL FAILED: {trial_id} for model {model_name}")
+                    print(f"  ERROR: {e}")
+                    
+                    # Log the full traceback for debugging
+                    import traceback
+                    traceback.print_exc()
+                    
+                    # Create failed trial result
                     failed_result = TrialResult(
                         trial_id=trial_id,
                         model_name=model_name,
                         parameters=parameters,
+                        status='failed',
                         start_time=datetime.now().isoformat(),
                         end_time=datetime.now().isoformat(),
                         duration_seconds=0.0,
@@ -434,14 +505,26 @@ class HyperparameterSearch:
                         final_val_accuracy=0.0,
                         final_val_mse=0.0,
                         final_val_mae=0.0,
-                        training_history=[]
+                        training_history=[],
+                        error_message=str(e)
                     )
+                    
+                    # Log the failed trial and continue to the next trial
                     self.logger.log_trial(failed_result)
+                    continue  # This is the crucial part - continue to next trial
                 
                 trial_counter += 1
         
-        self.logger.save_summary()
-        print(f"\nSearch completed! Results saved to {self.output_dir}")
+        # Print final summary
+        total_trials = successful_trials + failed_trials
+        print(f"\n" + "="*80)
+        print(f"HYPERPARAMETER SEARCH COMPLETED")
+        print(f"Total trials: {total_trials}")
+        print(f"Successful: {successful_trials}")
+        print(f"Failed: {failed_trials}")
+        print(f"Success rate: {successful_trials/total_trials*100:.1f}%" if total_trials > 0 else "No trials completed")
+        print(f"Results saved to: {self.output_dir}")
+        print("="*80)
     
     def _run_trial(self, trial_id: str, model_name: str, parameters: Dict[str, Any]) -> TrialResult:
         """Run a single trial."""
@@ -451,35 +534,34 @@ class HyperparameterSearch:
         # Update config with trial parameters
         trial_config = self.config.copy()
         
-        # Separate model parameters from training parameters
-        model_params = {}
-        training_params = {}
-        
-        # Define which parameters belong to which section
-        training_param_names = {
-            'learning_rate', 'lr', 'weight_decay', 'epochs', 'batch_size', 
-            'optimizer', 'warmup_epochs', 'grad_clip', 'log_interval'
-        }
-        
+        # Step 3: Use scoped parameters instead of hardcoded lists
+        # Parameters come from search space as individual key-value pairs
+        # We need to organize them by scope (model, training, data, etc.)
+        scoped_params = {}
         for param_name, param_value in parameters.items():
-            if param_name in training_param_names:
-                training_params[param_name] = param_value
+            if '.' in param_name:
+                scope, param = param_name.split('.', 1)
+                if scope not in scoped_params:
+                    scoped_params[scope] = {}
+                scoped_params[scope][param] = param_value
             else:
-                model_params[param_name] = param_value
-        # Normalise alias names so Trainer sees the right keys
-        if 'learning_rate' in training_params:
-            training_params['lr'] = training_params.pop('learning_rate')
+                # Handle non-scoped parameters (fallback)
+                if 'model' not in scoped_params:
+                    scoped_params['model'] = {}
+                scoped_params['model'][param_name] = param_value
         
-        # Update model parameters in the model section
-        if 'model' not in trial_config:
-            trial_config['model'] = {}
-        trial_config['model'].update(model_params)
+        # Update config sections with scoped parameters
+        for param_scope, param_values in scoped_params.items():
+            if param_scope not in trial_config:
+                trial_config[param_scope] = {}
+            trial_config[param_scope].update(param_values)
+        
+        # Ensure model_name is set
         trial_config['model_name'] = model_name
         
-        # Update training parameters in the training section
-        if 'training' not in trial_config:
-            trial_config['training'] = {}
-        trial_config['training'].update(training_params)
+        # Handle learning rate alias for backward compatibility
+        if 'training' in trial_config and 'learning_rate' in trial_config['training']:
+            trial_config['training']['lr'] = trial_config['training'].pop('learning_rate')
         
         # Set random seed for this trial
         trial_seed = self.seed + hash(trial_id) % 10000

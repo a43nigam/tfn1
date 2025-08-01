@@ -205,24 +205,56 @@ class Trainer:
         return torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
 
     def _unpack_batch(self, batch: Dict[str, Any]):
-        # Handles all batch formats
-        if "input_ids" in batch and "labels" in batch:
+        """
+        Unpack batch data using the standardized data pipeline format.
+        
+        The collate function now guarantees 'inputs' and 'targets' exist.
+        This method handles the standard format and optional attention_mask for NLP tasks.
+        """
+        # Standard format from the unified data pipeline
+        if "inputs" in batch and "targets" in batch:
+            inputs = batch['inputs'].to(self.device)
+            targets = batch['targets'].to(self.device)
+            
+            # Handle models that need an attention mask (e.g., Transformers)
+            if 'attention_mask' in batch:
+                # The model's forward pass should expect a tuple in this case
+                model_input = (inputs, batch['attention_mask'].to(self.device))
+            else:
+                model_input = inputs
+            
+            return model_input, targets
+        
+        # Classification format with labels
+        elif "inputs" in batch and "labels" in batch:
+            inputs = batch['inputs'].to(self.device)
+            labels = batch['labels'].to(self.device)
+            
+            # Handle models that need an attention mask (e.g., Transformers)
+            if 'attention_mask' in batch:
+                # The model's forward pass should expect a tuple in this case
+                model_input = (inputs, batch['attention_mask'].to(self.device))
+            else:
+                model_input = inputs
+            
+            return model_input, labels
+        
+        # Legacy format support for backward compatibility
+        elif "input_ids" in batch and "labels" in batch:
+            # Language modeling format
             x = batch["input_ids"].to(self.device)
             y = batch["labels"].to(self.device)
             # Optionally pass attention_mask if present
             if "attention_mask" in batch:
                 return (x, batch["attention_mask"].to(self.device)), y
             return x, y
-        elif "labels" in batch and "source" in batch:
-            # Synthetic classification: use 'source' as input, 'labels' as target
-            x = batch["source"].to(self.device)
-            y = batch["labels"].to(self.device)
-            return x, y
         elif "source" in batch:
+            # Legacy format: use 'source' as input, 'target' as target
             x = batch["source"].to(self.device)
             y = batch["target"].to(self.device)
             return x, y
         elif "input" in batch:
+            # Legacy format: use 'input' as input, 'target' as target
             x = batch["input"].to(self.device)
             y = batch["target"].to(self.device)
             return x, y

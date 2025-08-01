@@ -13,12 +13,13 @@ from typing import Optional, Literal, Dict, Any, List
 
 from .tfn_enhanced import EnhancedTFNLayer
 from model.shared_layers import create_positional_embedding_strategy
+from .base_model import BaseSequenceModel
 
 # Type aliases for better readability
 TaskType = Literal["classification", "regression"]
 
 
-class TFN(nn.Module):
+class TFN(BaseSequenceModel):
     """A unified TFN model configurable for classification or regression.
 
     Arguments

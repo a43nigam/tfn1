@@ -205,6 +205,54 @@ def print_training_info(cfg: Dict[str, Any], model_name: str, model_info: Dict[s
     print("🎬 STARTING TRAINING...")
     print("="*80 + "\n")
 
+def validate_config_parameters(config: Dict[str, Any], args: argparse.Namespace) -> None:
+    """
+    Validate that all provided command-line arguments are valid for the specified model.
+    
+    Args:
+        config: The configuration dictionary
+        args: Command line arguments
+    
+    Raises:
+        ValueError: If invalid parameters are found
+    """
+    model_name = config.get("model_name", "tfn_classifier")
+    
+    try:
+        model_info = registry.get_model_config(model_name)
+    except ValueError as e:
+        raise ValueError(f"Invalid model name '{model_name}': {e}")
+    
+    # Get all allowed parameters for this model
+    allowed_params = set(
+        model_info.get("required_params", []) + 
+        model_info.get("optional_params", [])
+    )
+    
+    # Check all --set arguments
+    invalid_params = []
+    for override in args.set:
+        try:
+            key, value = override.split('=', 1)
+        except ValueError:
+            raise ValueError(f"Invalid override format: '{override}'. Expected 'key=value'")
+        
+        # Check if this is a model parameter
+        if key.startswith('model.'):
+            param_name = key.split('.', 1)[1]  # Remove 'model.' prefix
+            if param_name not in allowed_params:
+                invalid_params.append((key, param_name))
+    
+    # Report all invalid parameters at once
+    if invalid_params:
+        error_msg = f"Invalid parameters for model '{model_name}':\n"
+        for full_key, param_name in invalid_params:
+            error_msg += f"  - '{full_key}' (unknown parameter '{param_name}')\n"
+        error_msg += f"\nValid parameters for {model_name}:\n"
+        for param in sorted(allowed_params):
+            error_msg += f"  - model.{param}\n"
+        raise ValueError(error_msg)
+
 # -----------------------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------------------
@@ -214,6 +262,9 @@ def main() -> None:
     with open(args.config, "r") as f:
         cfg = yaml.safe_load(f)
     cfg = update_config_with_args(cfg, args)
+    
+    # Step 1: Pre-flight validation of command-line arguments
+    validate_config_parameters(cfg, args)
     
     # Device detection with --device flag support
     if args.device is not None:
@@ -259,7 +310,7 @@ def main() -> None:
         if hasattr(train_ds, attr) and attr not in model_cfg:
             model_cfg[attr] = getattr(train_ds, attr)
 
-    if model_name.startswith("tfn") and "pg19" in cfg["data"]["dataset_name"]:
+    if model_name.startswith("tfn") and cfg["data"].get("dataset_name", "").startswith("pg19"):
         from data.pg19_loader import PG19Dataset
         file_path = cfg["data"]["file_path"]
         tokenizer_name = cfg["data"].get("tokenizer_name", "gpt2")

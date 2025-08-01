@@ -20,15 +20,17 @@ Each class supports both classification and regression via the 'task' parameter.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import math
 
-from .shared_layers import LearnedPositionalEmbeddings, LinearAttention
+from .shared_layers import LinearAttention, create_positional_embedding_strategy
+from .base_model import BaseSequenceModel
 
 
-class TransformerBaseline(nn.Module):
+class TransformerBaseline(BaseSequenceModel):
     """
     Transformer encoder for sequence classification or regression.
+    
     Args:
         task: 'classification' or 'regression'
         vocab_size: Required for classification (input: token indices)
@@ -40,6 +42,9 @@ class TransformerBaseline(nn.Module):
         num_layers: Number of transformer layers
         num_heads: Number of attention heads
         dropout: Dropout rate
+        positional_embedding_strategy: Strategy for positional embeddings
+        calendar_features: Calendar features for time-based embeddings
+        feature_cardinalities: Cardinality of each calendar feature
     """
     def __init__(
         self,
@@ -54,19 +59,33 @@ class TransformerBaseline(nn.Module):
         num_layers: int = 2,
         num_heads: int = 4,
         dropout: float = 0.1,
+        positional_embedding_strategy: str = "learned",
+        calendar_features: Optional[List[str]] = None,
+        feature_cardinalities: Optional[Dict[str, int]] = None,
     ) -> None:
         super().__init__()
         self.task = task
         self.embed_dim = embed_dim
         self.output_len = output_len
         self.output_dim = output_dim
-        self.pos = LearnedPositionalEmbeddings(seq_len, embed_dim)
+        self.seq_len = seq_len
+        
+        # Use the factory pattern for positional embeddings
+        self.pos_embedding = create_positional_embedding_strategy(
+            strategy_name=positional_embedding_strategy,
+            max_len=seq_len,
+            embed_dim=embed_dim,
+            calendar_features=calendar_features,
+            feature_cardinalities=feature_cardinalities,
+        )
+        
         if task == "classification":
             assert vocab_size is not None, "vocab_size required for classification"
             self.input = nn.Embedding(vocab_size, embed_dim)
         else:
             assert input_dim is not None, "input_dim required for regression"
             self.input = nn.Linear(input_dim, embed_dim)
+            
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
             nhead=num_heads,
@@ -75,6 +94,7 @@ class TransformerBaseline(nn.Module):
             batch_first=True,
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
         if task == "classification":
             self.head = nn.Sequential(
                 nn.Linear(embed_dim, embed_dim // 2),
@@ -89,35 +109,62 @@ class TransformerBaseline(nn.Module):
                 nn.Dropout(dropout),
                 nn.Linear(embed_dim // 2, output_dim)
             )
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: [B, L] (classification) or [B, L, input_dim] (regression)"""
-        h = self.input(x) + self.pos(min(x.size(1), self.pos.pos.num_embeddings))
+            
+    def forward(self, 
+                inputs: torch.Tensor, 
+                positions: Optional[torch.Tensor] = None,
+                calendar_features: Optional[Dict[str, torch.Tensor]] = None,
+                **kwargs) -> torch.Tensor:
+        """
+        Forward pass.
+        
+        Parameters
+        ----------
+        inputs : torch.Tensor
+            Input tensor. Shape: [B, L] (classification) or [B, L, input_dim] (regression)
+        positions : Optional[torch.Tensor], default=None
+            Optional positional information. If None, uses sequential positions.
+        calendar_features : Optional[Dict[str, torch.Tensor]], default=None
+            Calendar features for time-based positional embeddings.
+        **kwargs
+            Additional keyword arguments.
+            
+        Returns
+        -------
+        torch.Tensor
+            Model output.
+        """
+        # Input embedding/projection
+        h = self.input(inputs)  # [B, L, embed_dim]
+        
+        # Generate positions if not provided
+        if positions is None:
+            seq_len = inputs.size(1)
+            positions = torch.arange(seq_len, device=inputs.device).unsqueeze(0)  # [1, L]
+        
+        # Add positional embeddings using the factory strategy
+        pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
+        h = h + pos_emb
+        
+        # Transformer layers
         h = self.transformer(h)
+        
         if self.task == "classification":
             pooled = h[:, 0, :]  # [B, embed_dim] - use first token for classification
             out = self.head(pooled)
         else:
             # For regression, use the last few tokens for multi-step forecasting
-            # Take the last output_len tokens, or all if sequence is shorter
-            seq_len = h.size(1)
-            if seq_len >= self.output_len:
-                # Use last output_len tokens
-                pooled = h[:, -self.output_len:, :]  # [B, output_len, embed_dim]
+            if self.output_len == 1:
+                out = self.head(h[:, -1, :])  # [B, output_dim]
             else:
-                # Pad with the last token if sequence is too short
-                last_token = h[:, -1:, :]  # [B, 1, embed_dim]
-                padding = last_token.repeat(1, self.output_len - seq_len, 1)  # [B, output_len - seq_len, embed_dim]
-                pooled = torch.cat([h, padding], dim=1)  # [B, output_len, embed_dim]
-            
-            # Apply head to each token
-            batch_size, output_len, embed_dim = pooled.shape
-            pooled_flat = pooled.reshape(-1, embed_dim)  # [B * output_len, embed_dim]
-            out_flat = self.head(pooled_flat)  # [B * output_len, output_dim]
-            out = out_flat.reshape(batch_size, output_len, self.output_dim)  # [B, output_len, output_dim]
+                # Multi-step forecasting: use last output_len tokens
+                last_tokens = h[:, -self.output_len:, :]  # [B, output_len, embed_dim]
+                out = self.head(last_tokens)  # [B, output_len, output_dim]
+        
         return out
 
 
-class PerformerBaseline(nn.Module):
+class PerformerBaseline(BaseSequenceModel):
     """Performer with linear attention for efficient sequence modeling."""
     def __init__(
         self,
@@ -132,13 +179,26 @@ class PerformerBaseline(nn.Module):
         num_layers: int = 2,
         proj_dim: int = 64,
         dropout: float = 0.1,
+        positional_embedding_strategy: str = "learned",
+        calendar_features: Optional[List[str]] = None,
+        feature_cardinalities: Optional[Dict[str, int]] = None,
     ) -> None:
         super().__init__()
         self.task = task
         self.embed_dim = embed_dim
         self.output_len = output_len
         self.output_dim = output_dim
-        self.pos = LearnedPositionalEmbeddings(seq_len, embed_dim)
+        self.seq_len = seq_len
+        
+        # Use the factory pattern for positional embeddings
+        self.pos_embedding = create_positional_embedding_strategy(
+            strategy_name=positional_embedding_strategy,
+            max_len=seq_len,
+            embed_dim=embed_dim,
+            calendar_features=calendar_features,
+            feature_cardinalities=feature_cardinalities,
+        )
+        
         if task == "classification":
             assert vocab_size is not None, "vocab_size required for classification"
             self.input = nn.Embedding(vocab_size, embed_dim)
@@ -148,7 +208,7 @@ class PerformerBaseline(nn.Module):
         
         # Linear attention layers
         self.layers = nn.ModuleList([
-            LinearAttention(embed_dim, proj_dim, dropout) 
+            LinearAttention(embed_dim, proj_dim) 
             for _ in range(num_layers)
         ])
         
@@ -167,30 +227,58 @@ class PerformerBaseline(nn.Module):
                 nn.Linear(embed_dim // 2, output_dim)
             )
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: [B, L] (classification) or [B, L, input_dim] (regression)"""
-        h = self.input(x) + self.pos(min(x.size(1), self.pos.pos.num_embeddings))
+    def forward(self, 
+                inputs: torch.Tensor, 
+                positions: Optional[torch.Tensor] = None,
+                calendar_features: Optional[Dict[str, torch.Tensor]] = None,
+                **kwargs) -> torch.Tensor:
+        """
+        Forward pass.
         
+        Parameters
+        ----------
+        inputs : torch.Tensor
+            Input tensor. Shape: [B, L] (classification) or [B, L, input_dim] (regression)
+        positions : Optional[torch.Tensor], default=None
+            Optional positional information. If None, uses sequential positions.
+        calendar_features : Optional[Dict[str, torch.Tensor]], default=None
+            Calendar features for time-based positional embeddings.
+        **kwargs
+            Additional keyword arguments.
+            
+        Returns
+        -------
+        torch.Tensor
+            Model output.
+        """
+        # Input embedding/projection
+        h = self.input(inputs)  # [B, L, embed_dim]
+        
+        # Generate positions if not provided
+        if positions is None:
+            seq_len = inputs.size(1)
+            positions = torch.arange(seq_len, device=inputs.device).unsqueeze(0)  # [1, L]
+        
+        # Add positional embeddings using the factory strategy
+        pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
+        h = h + pos_emb
+        
+        # Linear attention layers
         for layer in self.layers:
             h = layer(h)
-            
+        
         if self.task == "classification":
-            pooled = h[:, 0, :]  # [B, embed_dim]
+            pooled = h[:, 0, :]  # [B, embed_dim] - use first token for classification
             out = self.head(pooled)
         else:
-            # Multi-step forecasting logic
-            seq_len = h.size(1)
-            if seq_len >= self.output_len:
-                pooled = h[:, -self.output_len:, :]
+            # For regression, use the last few tokens for multi-step forecasting
+            if self.output_len == 1:
+                out = self.head(h[:, -1, :])  # [B, output_dim]
             else:
-                last_token = h[:, -1:, :]
-                padding = last_token.repeat(1, self.output_len - seq_len, 1)
-                pooled = torch.cat([h, padding], dim=1)
-            
-            batch_size, output_len, embed_dim = pooled.shape
-            pooled_flat = pooled.reshape(-1, embed_dim)
-            out_flat = self.head(pooled_flat)
-            out = out_flat.reshape(batch_size, output_len, self.output_dim)
+                # Multi-step forecasting: use last output_len tokens
+                last_tokens = h[:, -self.output_len:, :]  # [B, output_len, embed_dim]
+                out = self.head(last_tokens)  # [B, output_len, output_dim]
+        
         return out
 
 

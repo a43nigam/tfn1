@@ -35,47 +35,78 @@ def language_modeling_collate(batch: List[Dict[str, torch.Tensor]]) -> Dict[str,
 
 
 def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: str = "copy") -> Dict[str, torch.Tensor]:
-    """Custom ``collate_fn`` that pads variable-length sequences.
-
-    The result tensors have shape ``[B, max_len]`` where ``max_len`` is the
-    longest sequence in the batch.
     """
+    Custom collate function for variable-length sequences.
+    
+    Args:
+        batch: List of dictionaries with 'source' and 'target'/'label' keys
+        pad_idx: Padding token index
+        task: Task type ("copy", "classification", "regression")
+    
+    Returns:
+        Dictionary with padded tensors
+    """
+    if not batch:
+        raise ValueError("Empty batch provided to pad_collate")
+    
+    # Step 1: Eliminate Key Ambiguity - inspect first item to determine keys
+    first_item = batch[0]
+    input_key = 'input' if 'input' in first_item else 'source'
+    
+    # For classification, we have 'label' instead of 'target'
+    if task == "classification":
+        target_key = 'label'
+    else:
+        target_key = 'target' if 'target' in first_item else 'target'
+    
     batch_size = len(batch)
-    lengths = [item["source"].size(0) for item in batch]
+    lengths = [item[input_key].size(0) for item in batch]
     max_len = max(lengths)
-
+    
     # Determine data type and shape based on task and first item
-    first_item = batch[0]["source"]
+    first_item_data = first_item[input_key]
     if task == "regression":
         # For regression, we have feature vectors [seq_len, input_dim]
-        input_dim = first_item.size(1) if first_item.dim() > 1 else 1
+        input_dim = first_item_data.size(1) if first_item_data.dim() > 1 else 1
         dtype = torch.float
         src = torch.full((batch_size, max_len, input_dim), pad_idx, dtype=dtype)
-        tgt = torch.full((batch_size, max_len, input_dim), pad_idx, dtype=dtype)
+        if task != "classification":
+            tgt = torch.full((batch_size, max_len, input_dim), pad_idx, dtype=dtype)
     else:
         # For classification/copy, we have token sequences [seq_len]
         dtype = torch.long
         src = torch.full((batch_size, max_len), pad_idx, dtype=dtype)
-        tgt = torch.full((batch_size, max_len), pad_idx, dtype=dtype)
-
+        if task != "classification":
+            tgt = torch.full((batch_size, max_len), pad_idx, dtype=dtype)
+    
     for i, item in enumerate(batch):
-        seq_len = item["source"].size(0)
-        source_data = item["source"].to(dtype)
-        target_data = item["target"].to(dtype)
+        seq_len = item[input_key].size(0)
+        source_data = item[input_key].to(dtype)
         
         if task == "regression":
-            # For regression, pad feature vectors
+            # Step 2: Correctly handle 3D tensors for regression
             src[i, :seq_len, :] = source_data
-            tgt[i, :seq_len, :] = target_data
+            if task != "classification":
+                target_data = item[target_key].to(dtype)
+                tgt[i, :seq_len, :] = target_data
         else:
             # For classification/copy, pad token sequences
             src[i, :seq_len] = source_data
-            tgt[i, :seq_len] = target_data
-
-    batch_dict = {"source": src, "target": tgt}
+            if task != "classification":
+                target_data = item[target_key].to(dtype)
+                tgt[i, :seq_len] = target_data
+    
+    # Step 3: Standardize the output dictionary
     if task == "classification":
+        # For classification, we have inputs and labels
+        batch_dict = {"inputs": src}
+        # Stack labels
         labels = torch.stack([item["label"] for item in batch])
         batch_dict["labels"] = labels
+    else:
+        # For copy/regression, we have inputs and targets
+        batch_dict = {"inputs": src, "targets": tgt}
+    
     return batch_dict
 
 class SyntheticCopyDataset(Dataset):
@@ -121,8 +152,9 @@ class SyntheticCopyDataset(Dataset):
             # Generate random features with input_dim dimensions
             input_dim = 8  # Default input dimension for regression
             seq = torch.randn(length, input_dim, generator=self.rng)
-        else:
-            # For classification/copy tasks, generate token sequences
+            item = {"source": seq, "target": seq.clone()}
+        elif self.task == "classification":
+            # For classification, generate token sequences with single labels
             # Sample integers uniformly from the vocabulary *excluding* the pad token.
             if self.vocab_size <= 1:
                 raise ValueError("vocab_size must be at least 2 to reserve a pad token.")
@@ -131,12 +163,22 @@ class SyntheticCopyDataset(Dataset):
             raw = torch.randint(0, self.vocab_size - 1, (length,), dtype=torch.long, generator=self.rng)
             # Shift values greater than or equal to pad_idx so that pad_idx is skipped
             seq = raw + (raw >= self.pad_idx).long()
-
-        item = {"source": seq, "target": seq.clone()}
-        if self.task == "classification":
-            # Example: use sum of sequence mod num_classes as label
+            
+            # For classification, use sum of sequence mod num_classes as label
             label = int(seq.sum().item()) % self.num_classes
-            item["label"] = torch.tensor(label, dtype=torch.long)
+            item = {"source": seq, "label": torch.tensor(label, dtype=torch.long)}
+        else:
+            # For copy tasks, generate token sequences
+            # Sample integers uniformly from the vocabulary *excluding* the pad token.
+            if self.vocab_size <= 1:
+                raise ValueError("vocab_size must be at least 2 to reserve a pad token.")
+
+            # Strategy: sample from [0, vocab_size-2] then shift by +1 for indices >= pad_idx
+            raw = torch.randint(0, self.vocab_size - 1, (length,), dtype=torch.long, generator=self.rng)
+            # Shift values greater than or equal to pad_idx so that pad_idx is skipped
+            seq = raw + (raw >= self.pad_idx).long()
+            item = {"source": seq, "target": seq.clone()}
+            
         return item
 
 def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
@@ -148,6 +190,7 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
         'test': 'test'
     }
     mapped_split = split_mapping.get(split, split)
+    
     """
     Factory to select the correct dataset based on config['data']['dataset_name'].
     Args:
@@ -169,6 +212,7 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
             num_classes=data_cfg.get("num_classes", 2),
         )
     
+    # Step 1: Unified pattern for datasets with get_splits method
     elif dataset_name == "ett":
         # Handle ETT dataset with new normalization parameters
         csv_path = data_cfg.get("csv_path", "data/ETTh1.csv")
@@ -196,18 +240,48 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
             raise ValueError(f"Unknown split: {split}")
     
     elif dataset_name == "jena":
-        return JenaClimateDataset(
-            csv_path=data_cfg.get("csv_path", "data/jena_climate_2009_2016.csv"),
-            input_len=data_cfg.get("input_len", 96),
-            output_len=data_cfg.get("output_len", 24),
+        # Step 2: Use get_splits pattern for Jena dataset
+        csv_path = data_cfg.get("csv_path", "data/jena_climate_2009_2016.csv")
+        input_len = data_cfg.get("input_len", 96)
+        output_len = data_cfg.get("output_len", 24)
+        
+        train_ds, val_ds, test_ds = JenaClimateDataset.get_splits(
+            csv_path=csv_path,
+            input_len=input_len,
+            output_len=output_len,
         )
+        
+        if split == 'train':
+            return train_ds
+        elif split == 'val':
+            return val_ds
+        elif split == 'test':
+            return test_ds
+        else:
+            raise ValueError(f"Unknown split: {split}")
     
     elif dataset_name == "stock":
-        return StockMarketDataset(
-            csv_path=data_cfg.get("csv_path", "data/all_stocks_5yr.csv"),
-            input_len=data_cfg.get("input_len", 60),
-            output_len=data_cfg.get("output_len", 5),
+        # Step 2: Use get_splits pattern for Stock dataset
+        csv_path = data_cfg.get("csv_path", "data/all_stocks_5yr.csv")
+        input_len = data_cfg.get("input_len", 60)
+        output_len = data_cfg.get("output_len", 5)
+        ticker = data_cfg.get("ticker", None)
+        
+        train_ds, val_ds, test_ds = StockMarketDataset.get_splits(
+            csv_path=csv_path,
+            input_len=input_len,
+            output_len=output_len,
+            ticker=ticker,
         )
+        
+        if split == 'train':
+            return train_ds
+        elif split == 'val':
+            return val_ds
+        elif split == 'test':
+            return test_ds
+        else:
+            raise ValueError(f"Unknown split: {split}")
     
     elif dataset_name == "glue":
         return GLUEDataset(
@@ -259,16 +333,23 @@ def get_dataloader(config: Dict[str, Any], split: str = 'train') -> DataLoader:
     """
     dataset = dataloader_factory(config, split)
     
-    # Determine task type for collate function
-    task = config.get("model", {}).get("task", "classification")
-    dataset_name = config.get("data", {}).get("dataset_name", "")
+    # Step 1: Use the model registry to determine task type
+    model_name = config.get("model_name", "tfn_classifier")
+    try:
+        from model.registry import get_model_config
+        model_info = get_model_config(model_name)
+        task_type = model_info['task_type']
+    except (ImportError, KeyError, ValueError):
+        # Fallback to config-based task determination
+        task_type = config.get("model", {}).get("task", "classification")
     
-    # Special handling for language modeling datasets
-    if dataset_name in ["wikitext", "pg19"]:
+    # Step 2: Generalize collation selection based on task type
+    if task_type == "language_modeling":
         collate_fn = lambda batch: language_modeling_collate(batch)
-    elif task == "regression":
+    elif task_type in ("regression", "time_series"):
+        # This now works because pad_collate is fixed
         collate_fn = lambda batch: pad_collate(batch, task="regression")
-    else:
+    else:  # classification and other tasks
         collate_fn = lambda batch: pad_collate(batch, task="classification")
     
     # Get batch size
@@ -298,9 +379,17 @@ if __name__ == "__main__":
     loader = get_dataloader(cfg, split=args.split)
     batch = next(iter(loader))
     print("Batch keys:", batch.keys())
-    if "source" in batch:
+    
+    # Handle both old and new standardized keys
+    if "inputs" in batch:
+        print("inputs shape:", batch["inputs"].shape)
+        print("targets shape:", batch["targets"].shape)
+    elif "source" in batch:
         print("source shape:", batch["source"].shape)
         print("target shape:", batch["target"].shape)
+    elif "input_ids" in batch:
+        print("input_ids shape:", batch["input_ids"].shape)
+        print("attention_mask shape:", batch["attention_mask"].shape)
+        print("labels shape:", batch["labels"].shape)
     else:
-        print("input shape:", batch["input"].shape)
-        print("target shape:", batch["target"].shape) 
+        print("Unknown batch format:", batch.keys()) 
