@@ -700,8 +700,36 @@ class HyperparameterSearch:
         return trial.get_result()
     
     def _build_model(self, model_name: str, config: Dict[str, Any]) -> torch.nn.Module:
-        """Wrapper that delegates to model.utils.build_model (DRY)."""
-        return build_model(model_name, config.get('model', {}), config.get('data', {}))
+        """Build model with validation of required parameters."""
+        # Get model info from registry
+        model_info = registry.get_model_config(model_name)
+        required_params = model_info.get('required_params', [])
+        optional_params = model_info.get('optional_params', [])
+        defaults = model_info.get('defaults', {})
+        
+        # Validate that all required parameters are present
+        model_config = config.get('model', {})
+        missing_params = []
+        for param in required_params:
+            if param not in model_config:
+                missing_params.append(param)
+        
+        if missing_params:
+            error_msg = f"Missing required parameters for model '{model_name}': {missing_params}\n"
+            error_msg += f"Required parameters: {required_params}\n"
+            error_msg += f"Optional parameters: {optional_params}\n"
+            error_msg += f"Available model config keys: {list(model_config.keys())}\n"
+            error_msg += f"Full config keys: {list(config.keys())}"
+            raise ValueError(error_msg)
+        
+        # Add defaults for missing optional parameters
+        for param, default_value in defaults.items():
+            if param not in model_config:
+                model_config[param] = default_value
+        
+        # Build the model using the centralized builder
+        # Pass model_cfg and data_cfg separately as expected by build_model
+        return build_model(model_name, model_config, config.get('data', {}))
 
 
 

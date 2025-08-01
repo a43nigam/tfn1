@@ -211,7 +211,7 @@ class Trainer:
         The collate function now guarantees 'inputs' and 'targets' exist.
         This method handles the standard format and optional attention_mask for NLP tasks.
         """
-        # Standard format from the unified data pipeline
+        # Standard format from the unified data pipeline (regression/copy)
         if "inputs" in batch and "targets" in batch:
             inputs = batch['inputs'].to(self.device)
             targets = batch['targets'].to(self.device)
@@ -248,18 +248,28 @@ class Trainer:
             if "attention_mask" in batch:
                 return (x, batch["attention_mask"].to(self.device)), y
             return x, y
-        elif "source" in batch:
-            # Legacy format: use 'source' as input, 'target' as target
-            x = batch["source"].to(self.device)
-            y = batch["target"].to(self.device)
-            return x, y
-        elif "input" in batch:
+        elif "input" in batch and "target" in batch:
             # Legacy format: use 'input' as input, 'target' as target
             x = batch["input"].to(self.device)
             y = batch["target"].to(self.device)
             return x, y
+        elif "source" in batch and "target" in batch:
+            # Legacy format: use 'source' as input, 'target' as target
+            x = batch["source"].to(self.device)
+            y = batch["target"].to(self.device)
+            return x, y
         else:
-            raise ValueError(f"Unknown batch format: keys {list(batch.keys())}")
+            # Enhanced error message with debugging information
+            available_keys = list(batch.keys())
+            error_msg = f"Unknown batch format: keys {available_keys}\n"
+            error_msg += "Expected one of:\n"
+            error_msg += "  - 'inputs' and 'targets' (standard regression/copy)\n"
+            error_msg += "  - 'inputs' and 'labels' (standard classification)\n"
+            error_msg += "  - 'input_ids' and 'labels' (language modeling)\n"
+            error_msg += "  - 'input' and 'target' (legacy regression)\n"
+            error_msg += "  - 'source' and 'target' (legacy regression)\n"
+            error_msg += f"Available keys: {available_keys}"
+            raise ValueError(error_msg)
 
     def _fmt(self, val):
         return f"{val:.4f}" if val is not None else "N/A"

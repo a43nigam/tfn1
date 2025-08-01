@@ -59,6 +59,12 @@ def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: st
     else:
         target_key = 'target' if 'target' in first_item else 'target'
     
+    # Debug logging for data pipeline issues
+    if len(batch) == 1:  # Only log for first batch to avoid spam
+        print(f"DEBUG: pad_collate - task={task}, input_key={input_key}, target_key={target_key}")
+        print(f"DEBUG: first_item keys: {list(first_item.keys())}")
+        print(f"DEBUG: first_item shapes: {[(k, v.shape) for k, v in first_item.items()]}")
+    
     batch_size = len(batch)
     lengths = [item[input_key].size(0) for item in batch]
     max_len = max(lengths)
@@ -70,8 +76,13 @@ def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: st
         input_dim = first_item_data.size(1) if first_item_data.dim() > 1 else 1
         dtype = torch.float
         src = torch.full((batch_size, max_len, input_dim), pad_idx, dtype=dtype)
+        
+        # For regression, targets may have different shape than inputs
         if task != "classification":
-            tgt = torch.full((batch_size, max_len, input_dim), pad_idx, dtype=dtype)
+            first_target = first_item[target_key]
+            target_dim = first_target.size(1) if first_target.dim() > 1 else 1
+            target_len = first_target.size(0)
+            tgt = torch.full((batch_size, target_len, target_dim), pad_idx, dtype=dtype)
     else:
         # For classification/copy, we have token sequences [seq_len]
         dtype = torch.long
@@ -88,12 +99,14 @@ def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: st
             src[i, :seq_len, :] = source_data
             if task != "classification":
                 target_data = item[target_key].to(dtype)
-                tgt[i, :seq_len, :] = target_data
+                target_len = target_data.size(0)
+                tgt[i, :target_len, :] = target_data
         else:
             # For classification/copy, pad token sequences
             src[i, :seq_len] = source_data
             if task != "classification":
                 target_data = item[target_key].to(dtype)
+                # For copy tasks, input and target have same shape
                 tgt[i, :seq_len] = target_data
     
     # Step 3: Standardize the output dictionary
@@ -106,6 +119,11 @@ def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: st
     else:
         # For copy/regression, we have inputs and targets
         batch_dict = {"inputs": src, "targets": tgt}
+    
+    # Debug logging for output
+    if len(batch) == 1:  # Only log for first batch to avoid spam
+        print(f"DEBUG: pad_collate output keys: {list(batch_dict.keys())}")
+        print(f"DEBUG: pad_collate output shapes: {[(k, v.shape) for k, v in batch_dict.items()]}")
     
     return batch_dict
 
@@ -322,50 +340,52 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
 
 def get_dataloader(config: Dict[str, Any], split: str = 'train') -> DataLoader:
     """
-    Create a DataLoader for the specified dataset and split.
+    Get DataLoader with proper collation based on dataset and task.
     
     Args:
         config: Configuration dictionary
         split: Dataset split ('train', 'val', 'test')
     
     Returns:
-        DataLoader with appropriate collate function
+        DataLoader with appropriate collation function
     """
+    # Get dataset
     dataset = dataloader_factory(config, split)
     
-    # Step 1: Use the model registry to determine task type
-    model_name = config.get("model_name", "tfn_classifier")
-    try:
-        from model.registry import get_model_config
-        model_info = get_model_config(model_name)
-        task_type = model_info['task_type']
-    except (ImportError, KeyError, ValueError):
-        # Fallback to config-based task determination
-        task_type = config.get("model", {}).get("task", "classification")
+    # Determine task type for proper collation
+    data_cfg = config.get("data", {})
+    dataset_name = data_cfg.get("dataset_name", "synthetic")
     
-    # Step 2: Generalize collation selection based on task type
-    if task_type == "language_modeling":
-        collate_fn = lambda batch: language_modeling_collate(batch)
-    elif task_type in ("regression", "time_series"):
-        # This now works because pad_collate is fixed
-        collate_fn = lambda batch: pad_collate(batch, task="regression")
-    else:  # classification and other tasks
-        collate_fn = lambda batch: pad_collate(batch, task="classification")
+    # Auto-detect task based on dataset and model
+    task = data_cfg.get("task", "regression")  # Default to regression for time series
     
-    # Get batch size
+    # Override based on dataset type
+    if dataset_name in ["ett", "jena", "stock"]:
+        task = "regression"
+    elif dataset_name in ["glue", "arxiv", "imdb"]:
+        task = "classification"
+    elif dataset_name == "synthetic":
+        task = data_cfg.get("task", "copy")
+    
+    # Get batch size from config
     batch_size = config.get("training", {}).get("batch_size", 32)
     
-    # Create DataLoader
-    dataloader = DataLoader(
+    # Use appropriate collation function
+    if task == "classification":
+        # For classification, we need special handling
+        collate_fn = lambda batch: pad_collate(batch, task="classification")
+    else:
+        # For regression/copy tasks
+        collate_fn = lambda batch: pad_collate(batch, task=task)
+    
+    return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=(split == 'train'),
         collate_fn=collate_fn,
-        num_workers=0,  # Set to 0 for debugging, increase for production
-        drop_last=(split == 'train'),
+        num_workers=0,  # Keep simple for debugging
+        drop_last=(split == 'train')
     )
-    
-    return dataloader
 
 if __name__ == "__main__":
     import yaml
