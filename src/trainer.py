@@ -208,66 +208,48 @@ class Trainer:
         """
         Unpack batch data using the standardized data pipeline format.
         
-        The collate function now guarantees 'inputs' and 'targets' exist.
-        This method handles the standard format and optional attention_mask for NLP tasks.
+        All data loaders now return a standardized format:
+        - For regression/copy tasks: {"inputs": ..., "targets": ...}
+        - For classification tasks: {"inputs": ..., "labels": ...}
+        - Optional "attention_mask" for NLP tasks
+        
+        This method assumes the standardized format and provides clear error messages.
         """
-        # Standard format from the unified data pipeline (regression/copy)
+        # Standard format from the unified data pipeline
         if "inputs" in batch and "targets" in batch:
+            # Regression/copy tasks
             inputs = batch['inputs'].to(self.device)
             targets = batch['targets'].to(self.device)
             
             # Handle models that need an attention mask (e.g., Transformers)
             if 'attention_mask' in batch:
-                # The model's forward pass should expect a tuple in this case
                 model_input = (inputs, batch['attention_mask'].to(self.device))
             else:
                 model_input = inputs
             
             return model_input, targets
         
-        # Classification format with labels
         elif "inputs" in batch and "labels" in batch:
+            # Classification tasks
             inputs = batch['inputs'].to(self.device)
             labels = batch['labels'].to(self.device)
             
             # Handle models that need an attention mask (e.g., Transformers)
             if 'attention_mask' in batch:
-                # The model's forward pass should expect a tuple in this case
                 model_input = (inputs, batch['attention_mask'].to(self.device))
             else:
                 model_input = inputs
             
             return model_input, labels
         
-        # Legacy format support for backward compatibility
-        elif "input_ids" in batch and "labels" in batch:
-            # Language modeling format
-            x = batch["input_ids"].to(self.device)
-            y = batch["labels"].to(self.device)
-            # Optionally pass attention_mask if present
-            if "attention_mask" in batch:
-                return (x, batch["attention_mask"].to(self.device)), y
-            return x, y
-        elif "input" in batch and "target" in batch:
-            # Legacy format: use 'input' as input, 'target' as target
-            x = batch["input"].to(self.device)
-            y = batch["target"].to(self.device)
-            return x, y
-        elif "source" in batch and "target" in batch:
-            # Legacy format: use 'source' as input, 'target' as target
-            x = batch["source"].to(self.device)
-            y = batch["target"].to(self.device)
-            return x, y
         else:
             # Enhanced error message with debugging information
             available_keys = list(batch.keys())
-            error_msg = f"Unknown batch format: keys {available_keys}\n"
-            error_msg += "Expected one of:\n"
-            error_msg += "  - 'inputs' and 'targets' (standard regression/copy)\n"
-            error_msg += "  - 'inputs' and 'labels' (standard classification)\n"
-            error_msg += "  - 'input_ids' and 'labels' (language modeling)\n"
-            error_msg += "  - 'input' and 'target' (legacy regression)\n"
-            error_msg += "  - 'source' and 'target' (legacy regression)\n"
+            error_msg = f"Invalid batch format: keys {available_keys}\n"
+            error_msg += "Expected standardized format:\n"
+            error_msg += "  - 'inputs' and 'targets' (regression/copy tasks)\n"
+            error_msg += "  - 'inputs' and 'labels' (classification tasks)\n"
+            error_msg += "  - Optional 'attention_mask' for NLP tasks\n"
             error_msg += f"Available keys: {available_keys}"
             raise ValueError(error_msg)
 

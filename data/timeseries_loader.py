@@ -184,8 +184,8 @@ class ETTDataset(Dataset):
         if y.ndim == 1:
             y = y[:, None]
         return {
-            'input': torch.tensor(x, dtype=torch.float32),
-            'target': torch.tensor(y, dtype=torch.float32),
+            'inputs': torch.tensor(x, dtype=torch.float32),
+            'targets': torch.tensor(y, dtype=torch.float32),
         }
 
     @staticmethod

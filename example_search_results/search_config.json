@@ -7,6 +7,10 @@
       128,
       256
     ],
+    "model.num_layers": [
+      2,
+      4
+    ],
     "training.lr": [
       0.0001,
       0.001
@@ -23,16 +27,23 @@
           256
         ]
       },
-      "training.lr": {
+      "model.num_layers": {
         "values": [
+          2,
+          4
+        ]
+      },
+      "training.lr": {
+        "logspace": [
           0.0001,
           0.001
-        ]
+        ],
+        "steps": 2
       }
     }
   },
-  "patience": 1,
+  "patience": 2,
   "min_epochs": 1,
   "seed": 42,
-  "total_trials": 4
+  "total_trials": 8
 }

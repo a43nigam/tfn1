@@ -3,32 +3,26 @@ __all__ = ["SyntheticCopyDataset", "pad_collate", "get_dataloader"]
 import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Any, Dict, List, Optional
-from data.timeseries_loader import ETTDataset
-from data.nlp_loader import NLPDataset
-from data.jena_loader import JenaClimateDataset
-from data.stock_loader import StockMarketDataset
-from data.glue_loader import GLUEDataset
-from data.arxiv_loader import ArxivDataset
-from data.pg19_loader import PG19Dataset
-from data.wikitext_loader import WikiTextDataset
 
 def language_modeling_collate(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
     """
     Collate function for language modeling datasets (WikiText, PG19).
     
     Args:
-        batch: List of dictionaries with 'input_ids', 'attention_mask', 'labels'
+        batch: List of dictionaries with standardized format:
+               'inputs', 'attention_mask', 'labels'
     
     Returns:
-        Dictionary with batched tensors
+        Dictionary with standardized format:
+        {'inputs': ..., 'attention_mask': ..., 'labels': ...}
     """
     # Stack all tensors
-    input_ids = torch.stack([item['input_ids'] for item in batch])
+    inputs = torch.stack([item['inputs'] for item in batch])
     attention_mask = torch.stack([item['attention_mask'] for item in batch])
     labels = torch.stack([item['labels'] for item in batch])
     
     return {
-        'input_ids': input_ids,
+        'inputs': inputs,
         'attention_mask': attention_mask,
         'labels': labels,
     }
@@ -39,38 +33,37 @@ def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: st
     Custom collate function for variable-length sequences.
     
     Args:
-        batch: List of dictionaries with 'source' and 'target'/'label' keys
+        batch: List of dictionaries with standardized format:
+               - 'inputs' and 'targets' for regression/copy tasks
+               - 'inputs' and 'labels' for classification tasks
         pad_idx: Padding token index
         task: Task type ("copy", "classification", "regression")
     
     Returns:
-        Dictionary with padded tensors
+        Dictionary with standardized format:
+        - {"inputs": ..., "targets": ...} for regression/copy
+        - {"inputs": ..., "labels": ...} for classification
     """
     if not batch:
         raise ValueError("Empty batch provided to pad_collate")
     
-    # Step 1: Eliminate Key Ambiguity - inspect first item to determine keys
+    # All datasets now use standardized format
     first_item = batch[0]
-    input_key = 'input' if 'input' in first_item else 'source'
     
-    # For classification, we have 'label' instead of 'target'
+    # Verify we have the expected standardized format
     if task == "classification":
-        target_key = 'label'
+        if "inputs" not in first_item or "labels" not in first_item:
+            raise ValueError(f"Classification batch must have 'inputs' and 'labels' keys. Got: {list(first_item.keys())}")
     else:
-        target_key = 'target' if 'target' in first_item else 'target'
-    
-    # Debug logging for data pipeline issues
-    if len(batch) == 1:  # Only log for first batch to avoid spam
-        print(f"DEBUG: pad_collate - task={task}, input_key={input_key}, target_key={target_key}")
-        print(f"DEBUG: first_item keys: {list(first_item.keys())}")
-        print(f"DEBUG: first_item shapes: {[(k, v.shape) for k, v in first_item.items()]}")
+        if "inputs" not in first_item or "targets" not in first_item:
+            raise ValueError(f"Regression/copy batch must have 'inputs' and 'targets' keys. Got: {list(first_item.keys())}")
     
     batch_size = len(batch)
-    lengths = [item[input_key].size(0) for item in batch]
+    lengths = [item['inputs'].size(0) for item in batch]
     max_len = max(lengths)
     
     # Determine data type and shape based on task and first item
-    first_item_data = first_item[input_key]
+    first_item_data = first_item['inputs']
     if task == "regression":
         # For regression, we have feature vectors [seq_len, input_dim]
         input_dim = first_item_data.size(1) if first_item_data.dim() > 1 else 1
@@ -78,11 +71,10 @@ def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: st
         src = torch.full((batch_size, max_len, input_dim), pad_idx, dtype=dtype)
         
         # For regression, targets may have different shape than inputs
-        if task != "classification":
-            first_target = first_item[target_key]
-            target_dim = first_target.size(1) if first_target.dim() > 1 else 1
-            target_len = first_target.size(0)
-            tgt = torch.full((batch_size, target_len, target_dim), pad_idx, dtype=dtype)
+        first_target = first_item['targets']
+        target_dim = first_target.size(1) if first_target.dim() > 1 else 1
+        target_len = first_target.size(0)
+        tgt = torch.full((batch_size, target_len, target_dim), pad_idx, dtype=dtype)
     else:
         # For classification/copy, we have token sequences [seq_len]
         dtype = torch.long
@@ -91,39 +83,33 @@ def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: st
             tgt = torch.full((batch_size, max_len), pad_idx, dtype=dtype)
     
     for i, item in enumerate(batch):
-        seq_len = item[input_key].size(0)
-        source_data = item[input_key].to(dtype)
+        seq_len = item['inputs'].size(0)
+        source_data = item['inputs'].to(dtype)
         
         if task == "regression":
-            # Step 2: Correctly handle 3D tensors for regression
+            # Handle 3D tensors for regression
             src[i, :seq_len, :] = source_data
-            if task != "classification":
-                target_data = item[target_key].to(dtype)
-                target_len = target_data.size(0)
-                tgt[i, :target_len, :] = target_data
+            target_data = item['targets'].to(dtype)
+            target_len = target_data.size(0)
+            tgt[i, :target_len, :] = target_data
         else:
             # For classification/copy, pad token sequences
             src[i, :seq_len] = source_data
             if task != "classification":
-                target_data = item[target_key].to(dtype)
+                target_data = item['targets'].to(dtype)
                 # For copy tasks, input and target have same shape
                 tgt[i, :seq_len] = target_data
     
-    # Step 3: Standardize the output dictionary
+    # Return standardized format
     if task == "classification":
         # For classification, we have inputs and labels
         batch_dict = {"inputs": src}
         # Stack labels
-        labels = torch.stack([item["label"] for item in batch])
+        labels = torch.stack([item["labels"] for item in batch])
         batch_dict["labels"] = labels
     else:
         # For copy/regression, we have inputs and targets
         batch_dict = {"inputs": src, "targets": tgt}
-    
-    # Debug logging for output
-    if len(batch) == 1:  # Only log for first batch to avoid spam
-        print(f"DEBUG: pad_collate output keys: {list(batch_dict.keys())}")
-        print(f"DEBUG: pad_collate output shapes: {[(k, v.shape) for k, v in batch_dict.items()]}")
     
     return batch_dict
 
@@ -170,7 +156,7 @@ class SyntheticCopyDataset(Dataset):
             # Generate random features with input_dim dimensions
             input_dim = 8  # Default input dimension for regression
             seq = torch.randn(length, input_dim, generator=self.rng)
-            item = {"source": seq, "target": seq.clone()}
+            item = {"inputs": seq, "targets": seq.clone()}
         elif self.task == "classification":
             # For classification, generate token sequences with single labels
             # Sample integers uniformly from the vocabulary *excluding* the pad token.
@@ -184,7 +170,7 @@ class SyntheticCopyDataset(Dataset):
             
             # For classification, use sum of sequence mod num_classes as label
             label = int(seq.sum().item()) % self.num_classes
-            item = {"source": seq, "label": torch.tensor(label, dtype=torch.long)}
+            item = {"inputs": seq, "labels": torch.tensor(label, dtype=torch.long)}
         else:
             # For copy tasks, generate token sequences
             # Sample integers uniformly from the vocabulary *excluding* the pad token.
@@ -195,148 +181,30 @@ class SyntheticCopyDataset(Dataset):
             raw = torch.randint(0, self.vocab_size - 1, (length,), dtype=torch.long, generator=self.rng)
             # Shift values greater than or equal to pad_idx so that pad_idx is skipped
             seq = raw + (raw >= self.pad_idx).long()
-            item = {"source": seq, "target": seq.clone()}
+            item = {"inputs": seq, "targets": seq.clone()}
             
         return item
 
 def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
-    # Map split names for datasets that use different naming conventions
-    split_mapping = {
-        'val': 'validation',  # WikiText uses 'validation' instead of 'val'
-        'validation': 'validation',
-        'train': 'train',
-        'test': 'test'
-    }
-    mapped_split = split_mapping.get(split, split)
-    
     """
     Factory to select the correct dataset based on config['data']['dataset_name'].
+    Uses the data registry pattern for extensibility.
+    
     Args:
         config: full config dict
         split: 'train', 'val', or 'test'
     Returns:
         torch.utils.data.Dataset
     """
+    from data.registry import create_dataset
+    
     data_cfg = config["data"]
     dataset_name = data_cfg.get("dataset_name", "synthetic")
     
-    if dataset_name == "synthetic":
-        return SyntheticCopyDataset(
-            dataset_size=data_cfg.get("dataset_size", 1000),
-            seq_len=data_cfg.get("seq_len", 50),
-            vocab_size=data_cfg.get("vocab_size", 20),
-            pad_idx=data_cfg.get("pad_idx", 0),
-            task=data_cfg.get("task", "copy"),
-            num_classes=data_cfg.get("num_classes", 2),
-        )
-    
-    # Step 1: Unified pattern for datasets with get_splits method
-    elif dataset_name == "ett":
-        # Handle ETT dataset with new normalization parameters
-        csv_path = data_cfg.get("csv_path", "data/ETTh1.csv")
-        input_len = data_cfg.get("input_len", 96)
-        output_len = data_cfg.get("output_len", 24)
-        normalization_strategy = data_cfg.get("normalization_strategy", "global")
-        instance_normalize = data_cfg.get("instance_normalize", False)
-        
-        # Get splits with new parameters
-        train_ds, val_ds, test_ds = ETTDataset.get_splits(
-            csv_path=csv_path,
-            input_len=input_len,
-            output_len=output_len,
-            normalization_strategy=normalization_strategy,
-            instance_normalize=instance_normalize
-        )
-        
-        if split == 'train':
-            return train_ds
-        elif split == 'val':
-            return val_ds
-        elif split == 'test':
-            return test_ds
-        else:
-            raise ValueError(f"Unknown split: {split}")
-    
-    elif dataset_name == "jena":
-        # Step 2: Use get_splits pattern for Jena dataset
-        csv_path = data_cfg.get("csv_path", "data/jena_climate_2009_2016.csv")
-        input_len = data_cfg.get("input_len", 96)
-        output_len = data_cfg.get("output_len", 24)
-        
-        train_ds, val_ds, test_ds = JenaClimateDataset.get_splits(
-            csv_path=csv_path,
-            input_len=input_len,
-            output_len=output_len,
-        )
-        
-        if split == 'train':
-            return train_ds
-        elif split == 'val':
-            return val_ds
-        elif split == 'test':
-            return test_ds
-        else:
-            raise ValueError(f"Unknown split: {split}")
-    
-    elif dataset_name == "stock":
-        # Step 2: Use get_splits pattern for Stock dataset
-        csv_path = data_cfg.get("csv_path", "data/all_stocks_5yr.csv")
-        input_len = data_cfg.get("input_len", 60)
-        output_len = data_cfg.get("output_len", 5)
-        ticker = data_cfg.get("ticker", None)
-        
-        train_ds, val_ds, test_ds = StockMarketDataset.get_splits(
-            csv_path=csv_path,
-            input_len=input_len,
-            output_len=output_len,
-            ticker=ticker,
-        )
-        
-        if split == 'train':
-            return train_ds
-        elif split == 'val':
-            return val_ds
-        elif split == 'test':
-            return test_ds
-        else:
-            raise ValueError(f"Unknown split: {split}")
-    
-    elif dataset_name == "glue":
-        return GLUEDataset(
-            task=data_cfg.get("task", "sst2"),
-            split=mapped_split,
-            max_length=data_cfg.get("max_length", 512),
-            tokenizer_name=data_cfg.get("tokenizer_name", "bert-base-uncased"),
-        )
-    
-    elif dataset_name == "arxiv":
-        return ArxivDataset(
-            csv_path=data_cfg.get("csv_path", "data/arxiv_sample.csv"),
-            max_length=data_cfg.get("max_length", 512),
-            tokenizer_name=data_cfg.get("tokenizer_name", "bert-base-uncased"),
-        )
-    
-    elif dataset_name == "pg19":
-        return PG19Dataset(
-            data_dir=data_cfg.get("data_dir", "data/pg19"),
-            split=mapped_split,
-            max_length=data_cfg.get("max_length", 512),
-            tokenizer_name=data_cfg.get("tokenizer_name", "gpt2"),
-        )
-    
-    elif dataset_name == "wikitext":
-        return WikiTextDataset(
-            dataset_name=data_cfg.get("wikitext_dataset_name", "wikitext-2-raw-v1"),
-            tokenizer_name=data_cfg.get("tokenizer_name", "gpt2"),
-            max_length=data_cfg.get("max_length", 512),
-            split=mapped_split,
-            text_col=data_cfg.get("text_col", "text"),
-            use_streaming=data_cfg.get("use_streaming", False),
-            max_samples=data_cfg.get("max_samples", None),
-        )
-    
-    else:
-        raise ValueError(f"Unknown dataset: {dataset_name}")
+    try:
+        return create_dataset(dataset_name, config, split)
+    except Exception as e:
+        raise ValueError(f"Failed to create dataset '{dataset_name}': {e}")
 
 def get_dataloader(config: Dict[str, Any], split: str = 'train') -> DataLoader:
     """

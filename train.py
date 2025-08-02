@@ -257,23 +257,22 @@ def validate_config_parameters(config: Dict[str, Any], args: argparse.Namespace)
 # Entry point
 # -----------------------------------------------------------------------------
 
-def main() -> None:
-    args = parse_args()
-    with open(args.config, "r") as f:
-        cfg = yaml.safe_load(f)
-    cfg = update_config_with_args(cfg, args)
+def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]:
+    """
+    Run training with the given configuration.
     
-    # Step 1: Pre-flight validation of command-line arguments
-    validate_config_parameters(cfg, args)
+    Args:
+        config: Configuration dictionary
+        device: Device to use ("auto", "cuda", "cpu")
     
-    # Device detection with --device flag support
-    if args.device is not None:
-        if args.device == "auto":
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            device = torch.device(args.device)
-    else:
+    Returns:
+        Dictionary containing training history and results
+    """
+    # Device detection
+    if device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(device)
     
     print(f"🔧 Using device: {device}")
     if device.type == "cuda" and torch.cuda.is_available():
@@ -287,21 +286,23 @@ def main() -> None:
         device = torch.device("cpu")
         print(f"   Using CPU instead")
 
-    model_name = cfg.get("model_name") or args.model_name or "tfn_classifier"
+    model_name = config.get("model_name", "tfn_classifier")
+    
     # Universal: Print split sizes for all datasets
     from data_pipeline import dataloader_factory
-    data_cfg = cfg["data"]
-    train_ds = dataloader_factory(cfg, split="train")
-    val_ds = dataloader_factory(cfg, split="val")
-    test_ds = dataloader_factory(cfg, split="test")
+    data_cfg = config["data"]
+    train_ds = dataloader_factory(config, split="train")
+    val_ds = dataloader_factory(config, split="val")
+    test_ds = dataloader_factory(config, split="test")
     dataset_name = data_cfg.get("dataset_name", "unknown")
     total_size = len(train_ds) + len(val_ds) + len(test_ds)
     print(f"{dataset_name} splits: train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}, total={total_size}")
-    train_loader = get_dataloader(cfg, split='train')
-    val_loader = get_dataloader(cfg, split='val')
-    dataset_cfg = cfg["data"]
-    model_cfg = cfg["model"]
-    train_cfg = cfg["training"]
+    
+    train_loader = get_dataloader(config, split='train')
+    val_loader = get_dataloader(config, split='val')
+    dataset_cfg = config["data"]
+    model_cfg = config["model"]
+    train_cfg = config["training"]
 
     # ------------------------------------------------------------------
     # Auto-fill model config with dataset-dependent attributes
@@ -310,13 +311,13 @@ def main() -> None:
         if hasattr(train_ds, attr) and attr not in model_cfg:
             model_cfg[attr] = getattr(train_ds, attr)
 
-    if model_name.startswith("tfn") and cfg["data"].get("dataset_name", "").startswith("pg19"):
+    if model_name.startswith("tfn") and config["data"].get("dataset_name", "").startswith("pg19"):
         from data.pg19_loader import PG19Dataset
-        file_path = cfg["data"]["file_path"]
-        tokenizer_name = cfg["data"].get("tokenizer_name", "gpt2")
-        max_length = cfg["data"].get("max_length", 512)
-        split_frac = cfg["data"].get("split_frac", {"train": 0.8, "val": 0.1, "test": 0.1})
-        text_col = cfg["data"].get("text_col", "text")
+        file_path = config["data"]["file_path"]
+        tokenizer_name = config["data"].get("tokenizer_name", "gpt2")
+        max_length = config["data"].get("max_length", 512)
+        split_frac = config["data"].get("split_frac", {"train": 0.8, "val": 0.1, "test": 0.1})
+        text_col = config["data"].get("text_col", "text")
         train_ds, val_ds, test_ds = PG19Dataset.get_splits(file_path, tokenizer_name, max_length, split_frac, text_col)
         print(f"PG19 splits: train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}")
 
@@ -324,13 +325,11 @@ def main() -> None:
     model_info = registry.get_model_config(model_name)
     task_type = model_info['task_type']
 
-    # --- KEY CHANGES START HERE ---
-    
-    # 1. Create the strategy object using the new factory
-    strategy = create_task_strategy(task_type, cfg)
+    # Create the strategy object using the new factory
+    strategy = create_task_strategy(task_type, config)
 
     # Print comprehensive training information
-    print_training_info(cfg, model_name, model_info, model, device, train_cfg)
+    print_training_info(config, model_name, model_info, model, device, train_cfg)
 
     lr_value = train_cfg.get("lr", 1e-3)
     if isinstance(lr_value, str):
@@ -339,23 +338,41 @@ def main() -> None:
         except ValueError:
             raise ValueError(f"Invalid learning rate value: {lr_value!r}")
 
-    # 2. Inject the strategy object into the Trainer
+    # Create trainer
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        strategy=strategy,  # CHANGED from task=task_type
+        strategy=strategy,
         device=device,
         lr=lr_value,
         weight_decay=train_cfg.get("weight_decay", 0.0),
-        epochs=train_cfg.get("epochs", args.epochs or 10),
+        epochs=train_cfg.get("epochs", 10),
         grad_clip=float(train_cfg.get("grad_clip", 1.0)),
         log_interval=train_cfg.get("log_interval", 100),
         warmup_epochs=train_cfg.get("warmup_epochs", 1),
         track_flops=True  # Enable FLOPs tracking
     )
 
-    trainer.fit()
+    # Run training and return history
+    history = trainer.fit()
+    return history
+
+
+def main() -> None:
+    args = parse_args()
+    with open(args.config, "r") as f:
+        cfg = yaml.safe_load(f)
+    cfg = update_config_with_args(cfg, args)
+    
+    # Step 1: Pre-flight validation of command-line arguments
+    validate_config_parameters(cfg, args)
+    
+    # Device detection with --device flag support
+    device = args.device or "auto"
+    
+    # Run training
+    run_training(cfg, device=device)
 
 if __name__ == "__main__":
     main() 

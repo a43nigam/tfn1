@@ -60,7 +60,7 @@ class PG19Dataset(Dataset):
         labels[:-1] = input_ids[1:]
         labels[-1] = -100  # ignore index for last token
         return {
-            'input_ids': input_ids,
+            'inputs': input_ids,
             'attention_mask': enc['attention_mask'].squeeze(0),
             'labels': labels,
         }

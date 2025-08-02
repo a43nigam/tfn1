@@ -531,12 +531,11 @@ class HyperparameterSearch:
         # Create trial instance
         trial = Trial(trial_id, model_name, parameters, self.config, self.patience, self.min_epochs)
         
-        # Update config with trial parameters
-        trial_config = self.config.copy()
+        # Start with a deep copy of the original config to preserve all static parameters
+        import copy
+        trial_config = copy.deepcopy(self.config)
         
-        # Step 3: Use scoped parameters instead of hardcoded lists
-        # Parameters come from search space as individual key-value pairs
-        # We need to organize them by scope (model, training, data, etc.)
+        # Organize swept parameters by scope (model, training, data, etc.)
         scoped_params = {}
         for param_name, param_value in parameters.items():
             if '.' in param_name:
@@ -550,13 +549,13 @@ class HyperparameterSearch:
                     scoped_params['model'] = {}
                 scoped_params['model'][param_name] = param_value
         
-        # Update config sections with scoped parameters
+        # Update config sections with scoped parameters while preserving static params
         for param_scope, param_values in scoped_params.items():
             if param_scope not in trial_config:
                 trial_config[param_scope] = {}
             trial_config[param_scope].update(param_values)
         
-        # Ensure model_name is set
+        # Ensure model_name is set for this trial
         trial_config['model_name'] = model_name
         
         # Handle learning rate alias for backward compatibility
@@ -571,6 +570,11 @@ class HyperparameterSearch:
         train_loader = get_dataloader(trial_config, split='train')
         val_loader = get_dataloader(trial_config, split='val')
         test_loader = get_dataloader(trial_config, split='test')
+        
+        # Debug: Print trial configuration for debugging
+        print(f"    Trial config keys: {list(trial_config.keys())}")
+        print(f"    Model config: {trial_config.get('model', {})}")
+        print(f"    Data config: {trial_config.get('data', {})}")
         
         # Build model
         model = self._build_model(model_name, trial_config)
@@ -719,7 +723,9 @@ class HyperparameterSearch:
             error_msg += f"Required parameters: {required_params}\n"
             error_msg += f"Optional parameters: {optional_params}\n"
             error_msg += f"Available model config keys: {list(model_config.keys())}\n"
-            error_msg += f"Full config keys: {list(config.keys())}"
+            error_msg += f"Full config keys: {list(config.keys())}\n"
+            error_msg += f"Model config contents: {model_config}\n"
+            error_msg += f"Data config contents: {config.get('data', {})}"
             raise ValueError(error_msg)
         
         # Add defaults for missing optional parameters
@@ -811,35 +817,24 @@ def _cast_config_value(value: str) -> Any:
     return value
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Hyperparameter search for TFN models")
-    parser.add_argument("--config", type=str, required=True,
-                       help="Path to YAML config file with 'search_space' section")
-    parser.add_argument("--output_dir", type=str, default=None,
-                       help="Output directory for results (overrides YAML)")
-    parser.add_argument("--device", type=str, default=None,
-                       help="Device to use: cuda | cpu | auto (overrides YAML)")
-    parser.add_argument("--seed", type=int, default=None,
-                       help="Random seed (overrides YAML)")
+def run_search(config: Dict[str, Any], output_dir: str = None, device: str = "auto", seed: int = None) -> Dict[str, Any]:
+    """
+    Run hyperparameter search with the given configuration.
     
-    # Generic override system (same as train.py)
-    parser.add_argument("--set", nargs='+', default=[],
-                       help="Override config parameters with key=value pairs")
+    Args:
+        config: Configuration dictionary with 'search_space' section
+        output_dir: Output directory for results (overrides config)
+        device: Device to use ("auto", "cuda", "cpu")
+        seed: Random seed (overrides config)
     
-    args = parser.parse_args()
-    
-    # Load configuration
-    with open(args.config, 'r') as f:
-        config = yaml.safe_load(f)
-    
-    # Apply overrides using same logic as train.py
-    config = update_config_with_args(config, args)
-    
+    Returns:
+        Dictionary containing search results and summary
+    """
     # Handle special arguments
-    if args.output_dir:
-        config['output_dir'] = args.output_dir
-    if args.seed:
-        config['seed'] = args.seed
+    if output_dir:
+        config['output_dir'] = output_dir
+    if seed:
+        config['seed'] = seed
     
     # Set defaults
     output_dir = config.get('output_dir', './search_results')
@@ -850,11 +845,9 @@ def main():
         print(f"Warning: Using Kaggle working directory: {output_dir}")
     
     print(f"🔧 Hyperparameter Search Configuration:")
-    print(f"   Config file: {args.config}")
     print(f"   Output directory: {output_dir}")
     
     # Device handling
-    device = config.get('training', {}).get('device', 'auto')
     if device == 'auto':
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
@@ -879,7 +872,49 @@ def main():
         seed=config.get('seed', 42)
     )
     
+    # Run search and return results
     search.run_search()
+    
+    # Return summary information
+    return {
+        'output_dir': output_dir,
+        'total_trials': len(search.models) * len(search.search_space),
+        'models': search.models,
+        'param_sweep': search.param_sweep
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Hyperparameter search for TFN models")
+    parser.add_argument("--config", type=str, required=True,
+                       help="Path to YAML config file with 'search_space' section")
+    parser.add_argument("--output_dir", type=str, default=None,
+                       help="Output directory for results (overrides YAML)")
+    parser.add_argument("--device", type=str, default=None,
+                       help="Device to use: cuda | cpu | auto (overrides YAML)")
+    parser.add_argument("--seed", type=int, default=None,
+                       help="Random seed (overrides YAML)")
+    
+    # Generic override system (same as train.py)
+    parser.add_argument("--set", nargs='+', default=[],
+                       help="Override config parameters with key=value pairs")
+    
+    args = parser.parse_args()
+    
+    # Load configuration
+    with open(args.config, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Apply overrides using same logic as train.py
+    config = update_config_with_args(config, args)
+    
+    # Run search
+    run_search(
+        config=config,
+        output_dir=args.output_dir,
+        device=args.device or "auto",
+        seed=args.seed
+    )
 
 
 if __name__ == "__main__":

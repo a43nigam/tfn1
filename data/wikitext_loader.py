@@ -78,7 +78,7 @@ class WikiTextDataset(Dataset):
         gc.collect()
         
         return {
-            'input_ids': input_ids,
+            'inputs': input_ids,
             'attention_mask': attention_mask,
             'labels': labels,
         }

@@ -56,7 +56,7 @@ class ArxivDataset(Dataset):
             return_tensors='pt',
         )
         return {
-            'input_ids': enc['input_ids'].squeeze(0),
+            'inputs': enc['input_ids'].squeeze(0),
             'attention_mask': enc['attention_mask'].squeeze(0),
             'labels': torch.tensor(label, dtype=torch.long),
         }
