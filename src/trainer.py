@@ -71,10 +71,6 @@ class Trainer:
         if self.save_checkpoints:
             os.makedirs(self.checkpoint_dir, exist_ok=True)
         
-        # Initialize wandb if requested
-        if self.use_wandb:
-            self._init_wandb()
-        
         self.history = {
             "train_loss": [], "val_loss": [], "train_acc": [], "val_acc": [], 
             "train_mse": [], "val_mse": [], "train_mae": [], "val_mae": [], 
@@ -100,7 +96,7 @@ class Trainer:
         # The strategy provides the loss function
         self.criterion = self.strategy.get_criterion() if self.strategy else torch.nn.MSELoss()
         
-        # Store hyperparameters for logging
+        # Store hyperparameters for logging (MUST be before wandb initialization)
         self.hyperparams = {
             'lr': lr,
             'weight_decay': weight_decay,
@@ -123,12 +119,27 @@ class Trainer:
             self.hyperparams['kernel_type'] = model.kernel_type
         if hasattr(model, 'evolution_type'):
             self.hyperparams['evolution_type'] = model.evolution_type
+        
+        # Initialize wandb AFTER hyperparameters are ready
+        if self.use_wandb:
+            self._init_wandb()
 
     def _init_wandb(self):
         """Initialize Weights & Biases experiment tracking."""
         if not WANDB_AVAILABLE:
             print("Warning: wandb not available. Skipping wandb initialization.")
             return
+        
+        # Defensive check to ensure hyperparams are available
+        if not hasattr(self, 'hyperparams'):
+            print("Warning: hyperparams not initialized. Creating default hyperparams for wandb.")
+            self.hyperparams = {
+                'lr': getattr(self, 'lr', 1e-3),
+                'weight_decay': getattr(self, 'weight_decay', 0.0),
+                'epochs': getattr(self, 'epochs', 10),
+                'device': str(getattr(self, 'device', 'cpu')),
+                'model_name': getattr(self.model, '__class__.__name__', 'Unknown'),
+            }
             
         wandb.init(
             project=self.project_name,
@@ -152,20 +163,29 @@ class Trainer:
                 data=[[m['name'], m['type'], m['parameters']] for m in model_summary]
             )})
 
-    def _log_metrics(self, epoch: int, metrics: Dict[str, float], step: str = "epoch"):
+    def _log_metrics(self, epoch: int, metrics: Dict[str, Optional[float]], step: str = "epoch"):
         """Log metrics to wandb and console."""
         # Add epoch to metrics
         metrics['epoch'] = epoch
         
-        # Log to wandb
+        # Log to wandb - filter out None values
         if self.use_wandb:
-            wandb.log(metrics, step=epoch)
+            # Filter out None values for wandb logging
+            wandb_metrics = {k: v for k, v in metrics.items() if v is not None}
+            wandb.log(wandb_metrics, step=epoch)
         
-        # Log to console
-        metric_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items() if k != 'epoch'])
+        # Log to console - handle None values properly
+        metric_parts = []
+        for k, v in metrics.items():
+            if k != 'epoch':
+                if v is None:
+                    metric_parts.append(f"{k}: None")
+                else:
+                    metric_parts.append(f"{k}: {v:.4f}")
+        metric_str = " | ".join(metric_parts)
         print(f"Epoch {epoch:02d} | {step.capitalize()} | {metric_str}")
 
-    def _save_checkpoint(self, epoch: int, metrics: Dict[str, float], is_best: bool = False):
+    def _save_checkpoint(self, epoch: int, metrics: Dict[str, Optional[float]], is_best: bool = False):
         """Save model checkpoint."""
         if not self.save_checkpoints:
             return
