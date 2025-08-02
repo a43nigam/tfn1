@@ -303,6 +303,8 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
     dataset_cfg = config["data"]
     model_cfg = config["model"]
     train_cfg = config["training"]
+    # ADD THIS LINE to get your W&B config
+    wandb_cfg = config.get("wandb", {})
 
     # ------------------------------------------------------------------
     # Auto-fill model config with dataset-dependent attributes
@@ -351,7 +353,11 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
         grad_clip=float(train_cfg.get("grad_clip", 1.0)),
         log_interval=train_cfg.get("log_interval", 100),
         warmup_epochs=train_cfg.get("warmup_epochs", 1),
-        track_flops=True  # Enable FLOPs tracking
+        track_flops=True,  # Enable FLOPs tracking
+        # ADD THESE LINES to pass the W&B settings to the Trainer
+        use_wandb=wandb_cfg.get('use_wandb', False),
+        project_name=wandb_cfg.get('project_name', 'tfn-experiments'),
+        experiment_name=wandb_cfg.get('experiment_name')
     )
 
     # Run training and return history
