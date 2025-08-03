@@ -25,7 +25,7 @@ from dataclasses import dataclass, asdict
 import itertools
 import random
 
-from data_pipeline import get_dataloader
+from data_pipeline import get_dataloader, dataloader_factory
 from model import registry
 from src.trainer import Trainer
 from src import metrics
@@ -566,6 +566,12 @@ class HyperparameterSearch:
         trial_seed = self.seed + hash(trial_id) % 10000
         torch.manual_seed(trial_seed)
         
+        # Create datasets directly (following train.py pattern)
+        from data_pipeline import dataloader_factory
+        train_ds = dataloader_factory(trial_config, split="train")
+        val_ds = dataloader_factory(trial_config, split="val")
+        test_ds = dataloader_factory(trial_config, split="test")
+        
         # Get data loaders
         train_loader = get_dataloader(trial_config, split='train')
         val_loader = get_dataloader(trial_config, split='val')
@@ -616,7 +622,11 @@ class HyperparameterSearch:
         from train import create_task_strategy
         model_info = registry.get_model_config(model_name)
         task_type = model_info['task_type']
-        strategy = create_task_strategy(task_type, trial_config)
+        
+        # Extract scaler from the direct dataset (following train.py pattern)
+        scaler = getattr(train_ds, 'scaler', None)
+        target_col_idx = getattr(train_ds, 'target_col', 0)
+        strategy = create_task_strategy(task_type, trial_config, scaler=scaler, target_col_idx=target_col_idx)
 
         trainer = Trainer(
             model=model,
@@ -634,43 +644,34 @@ class HyperparameterSearch:
             track_flops=True  # Enable FLOPs tracking for hyperparameter search
         )
         
-        # Custom training loop with early stopping
-        best_val_loss = float('inf')
-        best_epoch = 0
-        patience_counter = 0
-        
-        print(f"    Starting training for {trainer.epochs} epochs...")
-        
-        for epoch in range(1, trainer.epochs + 1):
-            # Train epoch
-            train_metrics = trainer._run_epoch(trainer.train_loader, train=True)
-            
-            # Validate epoch
-            val_metrics = trainer._run_epoch(trainer.val_loader, train=False)
-            
+        # Define epoch-end callback for hyperparameter search
+        def on_epoch_end(epoch: int, metrics: Dict[str, Any], trainer_instance) -> bool:
+            """Callback function for hyperparameter search epoch end."""
             # Extract metrics
-            train_loss = train_metrics[0]  # avg_loss
-            train_acc = train_metrics[1] if train_metrics[1] is not None else 0.0  # avg_acc
-            train_mse = train_metrics[2] if train_metrics[2] is not None else 0.0  # avg_mse
-            train_mae = train_metrics[3] if train_metrics[3] is not None else 0.0  # avg_mae
-            val_loss = val_metrics[0]  # avg_loss
-            val_acc = val_metrics[1] if val_metrics[1] is not None else 0.0  # avg_acc
-            val_mse = val_metrics[2] if val_metrics[2] is not None else 0.0  # avg_mse
-            val_mae = val_metrics[3] if val_metrics[3] is not None else 0.0  # avg_mae
+            train_loss = metrics['train_loss']
+            train_acc = metrics['train_acc']
+            train_mse = metrics['train_mse']
+            train_mae = metrics['train_mae']
+            val_loss = metrics['val_loss']
+            val_acc = metrics['val_acc']
+            val_mse = metrics['val_mse']
+            val_mae = metrics['val_mae']
             
             # Determine task type for appropriate metric printing
             task = trial_config.get('task', 'classification')
             
             if task in ('regression', 'time_series'):
-                # Print regression metrics (MSE, MAE)
-                print(f"    Epoch {epoch:2d}: train_loss={train_loss:.4f}, train_mse={train_mse:.4f}, train_mae={train_mae:.4f}, "
-                      f"val_loss={val_loss:.4f}, val_mse={val_mse:.4f}, val_mae={val_mae:.4f}", flush=True)
+                # Print regression metrics (MSE, MAE). train_loss is the same as train_mse for regression.
+                print(f"    Epoch {epoch:2d}: train_mse={train_mse:.4f}, train_mae={train_mae:.4f}, "
+                      f"val_mse={val_mse:.4f}, val_mae={val_mae:.4f}", flush=True)
             else:
-                # Print classification metrics (accuracy)
-                print(f"    Epoch {epoch:2d}: train_loss={train_loss:.4f}, train_acc={train_acc:.4f}, "
-                      f"val_loss={val_loss:.4f}, val_acc={val_acc:.4f}", flush=True)
+                # Print classification metrics (accuracy) - handle None values
+                train_acc_str = f"{train_acc:.4f}" if train_acc is not None else "None"
+                val_acc_str = f"{val_acc:.4f}" if val_acc is not None else "None"
+                print(f"    Epoch {epoch:2d}: train_loss={train_loss:.4f}, train_acc={train_acc_str}, "
+                      f"val_loss={val_loss:.4f}, val_acc={val_acc_str}", flush=True)
             
-            # Log epoch
+            # Log epoch to trial
             trial.log_epoch(
                 epoch=epoch,
                 train_loss=train_loss,
@@ -681,13 +682,20 @@ class HyperparameterSearch:
                 val_acc=val_acc,
                 val_mse=val_mse,
                 val_mae=val_mae,
-                learning_rate=trainer.optimizer.param_groups[0]['lr']
+                learning_rate=trainer_instance.optimizer.param_groups[0]['lr']
             )
             
             # Check early stopping
             if trial.should_stop(epoch, val_loss):
                 print(f"    Early stopping at epoch {epoch}")
-                break
+                return False  # Stop training
+            
+            return True  # Continue training
+        
+        print(f"    Starting training for {trainer.epochs} epochs...")
+        
+        # Use the Trainer's fit method with our callback
+        trainer.fit(on_epoch_end=on_epoch_end)
         
         # Get FLOPS stats if tracking was enabled
         flops_stats = None

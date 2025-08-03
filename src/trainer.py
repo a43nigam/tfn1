@@ -276,7 +276,15 @@ class Trainer:
     def _fmt(self, val):
         return f"{val:.4f}" if val is not None else "N/A"
 
-    def fit(self) -> Dict[str, Any]:
+    def fit(self, on_epoch_end: Optional[callable] = None) -> Dict[str, Any]:
+        """
+        Train the model with optional epoch-end callback.
+        
+        Args:
+            on_epoch_end: Optional callback function called at the end of each epoch.
+                         Signature: on_epoch_end(epoch, metrics, trainer) -> bool
+                         Return True to continue training, False to stop early.
+        """
         # Print model name and parameter count at the start
         model_name = getattr(self.model, 'name', self.model.__class__.__name__)
         num_params = sum(p.numel() for p in self.model.parameters())
@@ -356,6 +364,13 @@ class Trainer:
             
             # Save checkpoint
             self._save_checkpoint(epoch, metrics, is_best)
+            
+            # Call epoch-end callback if provided
+            if on_epoch_end is not None:
+                should_continue = on_epoch_end(epoch, metrics, self)
+                if not should_continue:
+                    print(f"Training stopped early at epoch {epoch} by callback")
+                    break
             
             # Step the scheduler
             if hasattr(self, 'scheduler'):
