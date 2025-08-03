@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import warnings
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Tuple, Union
 from src import metrics
@@ -76,6 +77,25 @@ class ClassificationStrategy(TaskStrategy):
 class RegressionStrategy(TaskStrategy):
     """Strategy for regression and time-series tasks."""
     
+    def __init__(self, scaler: Optional[Any] = None, target_col_idx: int = 0):
+        """
+        Initialize the regression strategy.
+        
+        Args:
+            scaler: Optional scaler object for denormalization
+            target_col_idx: Index of the target column for denormalization
+        """
+        self.scaler = scaler
+        self.target_col_idx = target_col_idx
+        
+        # Raise a warning at initialization if the scaler is missing
+        if self.scaler is None:
+            warnings.warn(
+                "Scaler not provided to RegressionStrategy. Metrics will be on a normalized scale.",
+                UserWarning,
+                stacklevel=2
+            )
+    
     def get_criterion(self) -> nn.Module:
         return nn.MSELoss()
 
@@ -114,16 +134,27 @@ class RegressionStrategy(TaskStrategy):
         loss = self.get_criterion()(preds_flat, y_flat)
         return preds, loss
 
-    def calculate_metrics(self, preds: torch.Tensor, targets: torch.Tensor, scaler: Optional[Any] = None, target_col_idx: int = 0) -> Dict[str, float]:
+    def calculate_metrics(self, preds: torch.Tensor, targets: torch.Tensor, **kwargs) -> Dict[str, float]:
+        """
+        Calculate regression metrics with proper denormalization if scaler is available.
+        
+        Args:
+            preds: Model predictions
+            targets: Ground truth targets
+            **kwargs: Additional arguments (ignored, scaler is stored in instance)
+            
+        Returns:
+            Dictionary containing MSE and MAE metrics
+        """
         # Flatten predictions and targets for metric calculation
         y_flat = targets.view(targets.size(0), -1)
         preds_flat = preds.view(preds.size(0), -1)
         
-        # Step 4: Add explicit checks and warnings for scaler availability
-        if scaler is not None:
+        # Use the instance scaler if available
+        if self.scaler is not None:
             # Get the mean and std for the target column ONLY
-            mean = scaler.mean_[target_col_idx]
-            std = scaler.scale_[target_col_idx]
+            mean = self.scaler.mean_[self.target_col_idx]
+            std = self.scaler.scale_[self.target_col_idx]
             
             # Denormalize predictions and targets
             # Formula: original = normalized * std + mean
@@ -134,15 +165,7 @@ class RegressionStrategy(TaskStrategy):
             mse_val = metrics.mse(preds_denorm, y_denorm)
             mae_val = metrics.mae(preds_denorm, y_denorm)
         else:
-            # If no scaler is found, warn the user and calculate on the current scale
-            import warnings
-            warnings.warn(
-                "Scaler not found. Calculating regression metrics (MSE, MAE) on potentially normalized data. "
-                "These values may not reflect the true error scale. "
-                "To get meaningful metrics, ensure the dataset provides a scaler object.",
-                UserWarning,
-                stacklevel=2
-            )
+            # Fallback if scaler wasn't provided
             mse_val = metrics.mse(preds_flat, y_flat)
             mae_val = metrics.mae(preds_flat, y_flat)
             

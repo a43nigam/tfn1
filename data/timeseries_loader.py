@@ -285,6 +285,9 @@ class ETTDataset(Dataset):
         for ds in [train_ds, val_ds, test_ds]:
             ds.normalizer = normalizer
             ds.calendar_features = calendar_features
+            # Also attach as scaler for compatibility with RegressionStrategy
+            ds.scaler = normalizer.scaler if hasattr(normalizer, 'scaler') else normalizer
+            ds.target_col = target_idx
         
         return train_ds, val_ds, test_ds
 

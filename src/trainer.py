@@ -77,12 +77,6 @@ class Trainer:
             "learning_rates": [], "epochs": []
         }
 
-        # Get the scaler from the training dataset for denormalization during evaluation
-        self.scaler = getattr(train_loader.dataset, 'scaler', None)
-        
-        # Get target column index for regression tasks with scalers
-        self.target_col_idx = getattr(train_loader.dataset, 'target_col', 0)
-
         # Create FLOPS tracker if enabled
         if self.track_flops:
             self.flops_tracker = create_flops_tracker(self.model)
@@ -148,6 +142,10 @@ class Trainer:
             tags=["tfn", "deep-learning", "field-networks"]
         )
         
+        # Define custom x-axis for epoch-level metrics
+        wandb.define_metric("epoch/epoch")
+        wandb.define_metric("epoch/*", step_metric="epoch/epoch")
+        
         # Log model architecture
         if hasattr(self.model, 'named_modules'):
             model_summary = []
@@ -170,9 +168,11 @@ class Trainer:
         
         # Log to wandb - filter out None values
         if self.use_wandb:
-            # Filter out None values for wandb logging
-            wandb_metrics = {k: v for k, v in metrics.items() if v is not None}
-            wandb.log(wandb_metrics, step=epoch)
+            # Prefix metrics with "epoch/" to link them to the custom step
+            wandb_metrics = {f"epoch/{k}": v for k, v in metrics.items() if v is not None}
+            # Add the epoch number itself to the log
+            wandb_metrics["epoch/epoch"] = epoch
+            wandb.log(wandb_metrics)
         
         # Log to console - handle None values properly
         metric_parts = []
@@ -373,11 +373,9 @@ class Trainer:
             
             # Log FLOPS to wandb
             if self.use_wandb:
-                wandb.log({"flops_stats": wandb.Table(
-                    columns=["layer", "flops", "params"],
-                    data=[[layer, stats['flops'], stats['params']] 
-                          for layer, stats in flops_stats.items()]
-                )})
+                # Prefix keys to avoid conflicts with other metrics
+                wandb_flops_stats = {f"flops/{k}": v for k, v in flops_stats.items()}
+                wandb.log(wandb_flops_stats)
         
         # Final logging
         if self.use_wandb:
@@ -417,9 +415,7 @@ class Trainer:
                     self.scheduler.step()
             
             # Delegate metric calculation to strategy
-            batch_metrics = self.strategy.calculate_metrics(
-                logits, y, scaler=self.scaler, target_col_idx=self.target_col_idx
-            )
+            batch_metrics = self.strategy.calculate_metrics(logits, y)
             
             # Accumulate metrics
             total_loss += loss.item()

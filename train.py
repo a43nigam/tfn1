@@ -9,7 +9,7 @@ from src.trainer import Trainer
 from src import metrics
 from model.utils import build_model as shared_build_model  # centralised builder
 from src.task_strategies import TaskStrategy, ClassificationStrategy, RegressionStrategy, LanguageModelingStrategy
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # -----------------------------------------------------------------------------
 # CLI
@@ -136,12 +136,13 @@ def build_model(model_name: str, model_cfg: dict, data_cfg: dict = None) -> torc
     """Thin wrapper around the centralised shared_build_model utility."""
     return shared_build_model(model_name, model_cfg, data_cfg)
 
-def create_task_strategy(task_type: str, config: Dict[str, Any]) -> TaskStrategy:
+def create_task_strategy(task_type: str, config: Dict[str, Any], scaler: Optional[Any] = None, target_col_idx: int = 0) -> TaskStrategy:
     """Factory function to create the appropriate task strategy."""
     if task_type == "classification" or task_type == "ner":
         return ClassificationStrategy()
     elif task_type in ("regression", "time_series"):
-        return RegressionStrategy()
+        # Pass the scaler to the strategy
+        return RegressionStrategy(scaler=scaler, target_col_idx=target_col_idx)
     elif task_type == "language_modeling":
         return LanguageModelingStrategy()
     else:
@@ -327,8 +328,12 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
     model_info = registry.get_model_config(model_name)
     task_type = model_info['task_type']
 
-    # Create the strategy object using the new factory
-    strategy = create_task_strategy(task_type, config)
+    # --- Get scaler from dataset for regression tasks ---
+    scaler = getattr(train_ds, 'scaler', None)
+    target_col_idx = getattr(train_ds, 'target_col', 0)
+
+    # Create the strategy object using the new factory with scaler
+    strategy = create_task_strategy(task_type, config, scaler=scaler, target_col_idx=target_col_idx)
 
     # Print comprehensive training information
     print_training_info(config, model_name, model_info, model, device, train_cfg)

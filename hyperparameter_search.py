@@ -713,9 +713,10 @@ class HyperparameterSearch:
         
         # Validate that all required parameters are present
         model_config = config.get('model', {})
+        data_config = config.get('data', {})
         missing_params = []
         for param in required_params:
-            if param not in model_config:
+            if param not in model_config and param not in data_config:
                 missing_params.append(param)
         
         if missing_params:
@@ -723,9 +724,10 @@ class HyperparameterSearch:
             error_msg += f"Required parameters: {required_params}\n"
             error_msg += f"Optional parameters: {optional_params}\n"
             error_msg += f"Available model config keys: {list(model_config.keys())}\n"
+            error_msg += f"Available data config keys: {list(data_config.keys())}\n"
             error_msg += f"Full config keys: {list(config.keys())}\n"
             error_msg += f"Model config contents: {model_config}\n"
-            error_msg += f"Data config contents: {config.get('data', {})}"
+            error_msg += f"Data config contents: {data_config}"
             raise ValueError(error_msg)
         
         # Add defaults for missing optional parameters
@@ -735,7 +737,7 @@ class HyperparameterSearch:
         
         # Build the model using the centralized builder
         # Pass model_cfg and data_cfg separately as expected by build_model
-        return build_model(model_name, model_config, config.get('data', {}))
+        return build_model(model_name, model_config, data_config)
 
 
 
