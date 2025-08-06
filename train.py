@@ -8,7 +8,7 @@ from model import registry
 from src.trainer import Trainer
 from src import metrics
 from model.utils import build_model as shared_build_model  # centralised builder
-from src.task_strategies import TaskStrategy, ClassificationStrategy, RegressionStrategy, LanguageModelingStrategy
+from src.task_strategies import TaskStrategy, ClassificationStrategy, RegressionStrategy, LanguageModelingStrategy, PDEStrategy
 from typing import Any, Dict, Optional
 
 # -----------------------------------------------------------------------------
@@ -138,7 +138,14 @@ def build_model(model_name: str, model_cfg: dict, data_cfg: dict = None) -> torc
 
 def create_task_strategy(task_type: str, config: Dict[str, Any], scaler: Optional[Any] = None, target_col_idx: int = 0) -> TaskStrategy:
     """Factory function to create the appropriate task strategy."""
-    if task_type == "classification" or task_type == "ner":
+    
+    # Check if a specific strategy is requested in the config
+    strategy_name = config.get("strategy", None)
+    
+    if strategy_name == "pde":
+        # Use PDE strategy for physics-informed neural networks
+        return PDEStrategy(scaler=scaler, target_col_idx=target_col_idx)
+    elif task_type == "classification" or task_type == "ner":
         return ClassificationStrategy()
     elif task_type in ("regression", "time_series"):
         # Pass the scaler to the strategy

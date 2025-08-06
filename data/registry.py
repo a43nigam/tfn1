@@ -5,7 +5,7 @@ This module provides a centralized registry of all available data loaders with t
 parameters, task types, and compatibility information.
 """
 
-from typing import Dict, List, Any, Optional, Callable, Type
+from typing import Dict, List, Any, Optional, Callable, Type, Tuple
 from torch.utils.data import Dataset
 from data.timeseries_loader import ETTDataset
 from data.nlp_loader import NLPDataset
@@ -15,7 +15,98 @@ from data.glue_loader import GLUEDataset
 from data.arxiv_loader import ArxivDataset
 from data.pg19_loader import PG19Dataset
 from data.wikitext_loader import WikiTextDataset
+from data.pde_loader import PDEDataset, DarcyFlowDataset, load_pde_data
 from data_pipeline import SyntheticCopyDataset
+from data.split_utils import get_split_sizes, DEFAULT_SPLIT_FRAC
+import torch
+
+# Create a BurgersDataset class for the registry
+class BurgersDataset(PDEDataset):
+    """Burgers' Equation dataset for 1D shock wave modeling."""
+    
+    def __init__(
+        self,
+        initial_conditions: torch.Tensor,
+        solutions: torch.Tensor,
+        grid: torch.Tensor,
+        split: str = 'train',
+        target_timestep: int = 10,
+        normalize: bool = True,
+        normalization_strategy: str = 'global',
+        scaler: Optional[Any] = None
+    ) -> None:
+        super().__init__(
+            initial_conditions=initial_conditions,
+            solutions=solutions,
+            grid=grid,
+            split=split,
+            target_timestep=target_timestep,
+            normalize=normalize,
+            normalization_strategy=normalization_strategy,
+            scaler=scaler
+        )
+    
+    @staticmethod
+    def get_splits(
+        file_path: str,
+        target_timestep: int = 10,
+        split_frac: Optional[Dict[str, float]] = None,
+        normalize: bool = True,
+        normalization_strategy: str = 'global'
+    ) -> Tuple['BurgersDataset', 'BurgersDataset', 'BurgersDataset']:
+        """Factory method for Burgers' equation datasets."""
+        # Load data once
+        initial_conditions, solutions, grid = load_pde_data(file_path, 'a', 'u', 'x')
+        
+        # Determine split sizes
+        if split_frac is None:
+            split_frac = DEFAULT_SPLIT_FRAC
+        
+        n_samples = initial_conditions.shape[0]
+        n_train, n_val, n_test = get_split_sizes(n_samples, split_frac)
+        
+        # Create splits
+        train_initial = initial_conditions[:n_train]
+        train_solutions = solutions[:n_train]
+        
+        val_initial = initial_conditions[n_train:n_train + n_val]
+        val_solutions = solutions[n_train:n_train + n_val]
+        
+        test_initial = initial_conditions[n_train + n_val:]
+        test_solutions = solutions[n_train + n_val:]
+        
+        # Create dataset instances
+        train_ds = BurgersDataset(
+            initial_conditions=train_initial,
+            solutions=train_solutions,
+            grid=grid,
+            split='train',
+            target_timestep=target_timestep,
+            normalize=normalize,
+            normalization_strategy=normalization_strategy
+        )
+        
+        val_ds = BurgersDataset(
+            initial_conditions=val_initial,
+            solutions=val_solutions,
+            grid=grid,
+            split='val',
+            target_timestep=target_timestep,
+            normalize=normalize,
+            normalization_strategy=normalization_strategy
+        )
+        
+        test_ds = BurgersDataset(
+            initial_conditions=test_initial,
+            solutions=test_solutions,
+            grid=grid,
+            split='test',
+            target_timestep=target_timestep,
+            normalize=normalize,
+            normalization_strategy=normalization_strategy
+        )
+        
+        return train_ds, val_ds, test_ds
 
 # Data Loader Registry with all parameters and task types
 DATASET_REGISTRY = {
@@ -162,6 +253,63 @@ DATASET_REGISTRY = {
         'factory_method': None,  # Direct instantiation
         'split_method': None,    # Uses split parameter
         'description': 'WikiText dataset for language modeling'
+    },
+    
+    # ============================================================================
+    # PDE DATASETS
+    # ============================================================================
+    
+    'pde': {
+        'class': PDEDataset,
+        'task_type': 'regression',
+        'required_params': ['file_path'],
+        'optional_params': ['initial_condition_key', 'solution_key', 'grid_key', 'input_timesteps', 
+                          'target_timestep', 'split_frac', 'normalize', 'normalization_strategy'],
+        'defaults': {
+            'file_path': 'data/pde_data.mat',
+            'initial_condition_key': 'a',
+            'solution_key': 'u',
+            'grid_key': 'x',
+            'input_timesteps': 1,
+            'target_timestep': 10,
+            'normalize': True,
+            'normalization_strategy': 'global'
+        },
+        'factory_method': 'get_splits',
+        'split_method': 'get_splits',
+        'description': 'Generic PDE dataset for physics-informed neural networks'
+    },
+    
+    'burgers': {
+        'class': BurgersDataset,
+        'task_type': 'regression',
+        'required_params': ['file_path'],
+        'optional_params': ['target_timestep', 'split_frac', 'normalize', 'normalization_strategy'],
+        'defaults': {
+            'file_path': 'data/burgers_data.mat',
+            'target_timestep': 10,
+            'normalize': True,
+            'normalization_strategy': 'global'
+        },
+        'factory_method': 'get_splits',
+        'split_method': 'get_splits',
+        'description': 'Burgers\' Equation dataset for shock wave modeling'
+    },
+    
+    'darcy': {
+        'class': DarcyFlowDataset,
+        'task_type': 'regression',
+        'required_params': ['file_path'],
+        'optional_params': ['target_timestep', 'split_frac', 'normalize', 'normalization_strategy'],
+        'defaults': {
+            'file_path': 'data/darcy_data.mat',
+            'target_timestep': 0,  # Darcy flow is typically steady-state
+            'normalize': True,
+            'normalization_strategy': 'global'
+        },
+        'factory_method': 'get_splits',
+        'split_method': 'get_splits',
+        'description': 'Darcy Flow dataset for porous media fluid flow modeling'
     }
 }
 

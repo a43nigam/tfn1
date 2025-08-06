@@ -40,4 +40,9 @@ search_space:
 patience: 2
 min_epochs: 2
 seed: 42
-output_dir: "./search_results/minimal" 
+output_dir: "./search_results/minimal"
+
+# Weights & Biases Configuration
+wandb:
+  use_wandb: false  # Set to true to enable logging for this search
+  project_name: "tfn-minimal-search" 

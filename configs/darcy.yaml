@@ -1,0 +1,24 @@
+model_name: tfn_regressor
+task: regression
+strategy: pde
+data:
+  dataset_name: darcy
+  file_path: data/darcy_data.mat
+  target_timestep: 0
+  normalize: true
+  normalization_strategy: global
+model:
+  input_dim: 1
+  embed_dim: 256
+  output_dim: 1
+  num_layers: 4
+  dropout: 0.1
+  kernel_type: rbf
+  evolution_type: cnn
+training:
+  batch_size: 32
+  lr: 1e-4
+  epochs: 100
+  warmup_epochs: 10
+  grad_clip: 1.0
+  log_interval: 50 

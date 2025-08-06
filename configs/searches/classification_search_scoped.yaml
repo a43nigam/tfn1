@@ -46,4 +46,9 @@ search_space:
 patience: 3
 min_epochs: 2
 seed: 42
-output_dir: "./search_results/classification_scoped" 
+output_dir: "./search_results/classification_scoped"
+
+# Weights & Biases Configuration
+wandb:
+  use_wandb: true  # Set to true to enable logging for this search
+  project_name: "tfn-classification-search" 

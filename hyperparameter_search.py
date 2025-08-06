@@ -47,18 +47,18 @@ class TrialResult:
     early_stop_reason: Optional[str]
     best_epoch: int
     best_val_loss: float
-    best_val_accuracy: float
-    best_val_mse: float
-    best_val_mae: float
     final_train_loss: float
-    final_train_accuracy: float
-    final_train_mse: float
-    final_train_mae: float
     final_val_loss: float
-    final_val_accuracy: float
-    final_val_mse: float
-    final_val_mae: float
     training_history: List[Dict[str, Any]]
+    best_val_accuracy: Optional[float] = None
+    best_val_mse: Optional[float] = None
+    best_val_mae: Optional[float] = None
+    final_train_accuracy: Optional[float] = None
+    final_train_mse: Optional[float] = None
+    final_train_mae: Optional[float] = None
+    final_val_accuracy: Optional[float] = None
+    final_val_mse: Optional[float] = None
+    final_val_mae: Optional[float] = None
     flops_stats: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None  # For failed trials
 
@@ -137,6 +137,8 @@ class ResultsLogger:
             "model_name": result.model_name,
             "best_val_loss": result.best_val_loss,
             "best_val_accuracy": result.best_val_accuracy,
+            "best_val_mse": result.best_val_mse,
+            "best_val_mae": result.best_val_mae,
             "epochs_completed": result.epochs_completed,
             "early_stopped": result.early_stopped,
             "duration_seconds": result.duration_seconds
@@ -150,44 +152,63 @@ class ResultsLogger:
     
     def save_summary(self) -> None:
         """Save a summary of all trials."""
-        summary = {
-            "total_trials": len(self.trials),
-            "successful_trials": len([t for t in self.trials if t.get('status') == 'completed']),
-            "failed_trials": len([t for t in self.trials if t.get('status') == 'failed']),
-            "trials": self.trials
-        }
-        
-        # Add failed trial details for debugging
-        failed_trials = [t for t in self.trials if t.get('status') == 'failed']
-        if failed_trials:
-            summary["failed_trial_details"] = [
-                {
-                    "trial_id": t.get('trial_id'),
-                    "model_name": t.get('model_name'),
-                    "parameters": t.get('parameters'),
-                    "error_message": t.get('error_message', 'Unknown error')
-                }
-                for t in failed_trials
-            ]
-        
-        with open(os.path.join(self.output_dir, "summary.json"), "w") as f:
-            json.dump(summary, f, indent=2)
-        
-        # Print summary to console
-        print(f"\nSearch Summary:")
-        print(f"  Total trials: {summary['total_trials']}")
-        print(f"  Successful: {summary['successful_trials']}")
-        print(f"  Failed: {summary['failed_trials']}")
-        if summary['failed_trials'] > 0:
-            print(f"  Failed trials:")
-            for failed in summary.get('failed_trial_details', []):
-                print(f"    - {failed['trial_id']} ({failed['model_name']}): {failed['error_message']}")
+        # This method is not used in the current implementation
+        # The summary is built incrementally in log_trial method
+        pass
     
     def save_search_config(self, config: Dict[str, Any]) -> None:
         """Save the search configuration."""
         config_file = os.path.join(self.output_dir, "search_config.json")
         with open(config_file, 'w') as f:
             json.dump(config, f, indent=2, default=str)
+    
+    def save_final_summary(self) -> None:
+        """Save the final search summary."""
+        summary_file = os.path.join(self.output_dir, "search_summary.json")
+        with open(summary_file, 'w') as f:
+            json.dump(self.summary, f, indent=2, default=str)
+        
+        # Print final summary to console
+        print(f"\nFinal Search Summary:")
+        print(f"  Total trials: {self.summary['total_trials']}")
+        print(f"  Completed trials: {self.summary['completed_trials']}")
+        if self.summary['best_trial']:
+            best_trial = self.summary['best_trial']
+            print(f"  Best trial: {best_trial['trial_id']}")
+            print(f"    Model: {best_trial['model_name']}")
+            print(f"    Best val_loss: {best_trial['best_val_loss']:.4f}")
+            
+            # Get task type for appropriate metric display
+            try:
+                model_info = registry.get_model_config(best_trial['model_name'])
+                task_type = model_info.get('task_type', 'classification')
+                
+                if task_type in ('classification', 'language_modeling', 'vision'):
+                    if best_trial.get('best_val_accuracy') is not None:
+                        print(f"    Best val_accuracy: {best_trial['best_val_accuracy']:.4f}")
+                elif task_type in ('regression', 'time_series'):
+                    if best_trial.get('best_val_mse') is not None:
+                        print(f"    Best val_mse: {best_trial['best_val_mse']:.4f}")
+                    if best_trial.get('best_val_mae') is not None:
+                        print(f"    Best val_mae: {best_trial['best_val_mae']:.4f}")
+                else:
+                    # Fallback: print all available metrics
+                    if best_trial.get('best_val_accuracy') is not None:
+                        print(f"    Best val_accuracy: {best_trial['best_val_accuracy']:.4f}")
+                    if best_trial.get('best_val_mse') is not None:
+                        print(f"    Best val_mse: {best_trial['best_val_mse']:.4f}")
+                    if best_trial.get('best_val_mae') is not None:
+                        print(f"    Best val_mae: {best_trial['best_val_mae']:.4f}")
+            except Exception as e:
+                # Fallback if model info is not available
+                print(f"    Warning: Could not determine task type: {e}")
+                if best_trial.get('best_val_accuracy') is not None:
+                    print(f"    Best val_accuracy: {best_trial['best_val_accuracy']:.4f}")
+                if best_trial.get('best_val_mse') is not None:
+                    print(f"    Best val_mse: {best_trial['best_val_mse']:.4f}")
+                if best_trial.get('best_val_mae') is not None:
+                    print(f"    Best val_mae: {best_trial['best_val_mae']:.4f}")
+        print(f"  Results saved to: {self.output_dir}")
 
 
 class Trial:
@@ -240,9 +261,11 @@ class Trial:
         
         return False
     
-    def log_epoch(self, epoch: int, train_loss: float, train_acc: float, 
-                  train_mse: float, train_mae: float, val_loss: float, val_acc: float,
-                  val_mse: float, val_mae: float, learning_rate: float = None) -> None:
+    def log_epoch(self, epoch: int, train_loss: float, train_acc: Optional[float], 
+                  train_mse: Optional[float], train_mae: Optional[float], 
+                  val_loss: float, val_acc: Optional[float],
+                  val_mse: Optional[float], val_mae: Optional[float], 
+                  learning_rate: Optional[float] = None) -> None:
         """Log metrics for current epoch."""
         epoch_data = {
             "epoch": epoch,
@@ -288,17 +311,17 @@ class Trial:
             early_stop_reason=self.early_stop_reason,
             best_epoch=self.best_epoch,
             best_val_loss=self.best_val_loss,
-            best_val_accuracy=best_metrics.get("val_accuracy", 0.0),
-            best_val_mse=best_metrics.get("val_mse", 0.0),
-            best_val_mae=best_metrics.get("val_mae", 0.0),
+            best_val_accuracy=best_metrics.get("val_accuracy"),
+            best_val_mse=best_metrics.get("val_mse"),
+            best_val_mae=best_metrics.get("val_mae"),
             final_train_loss=final_metrics.get("train_loss", 0.0),
-            final_train_accuracy=final_metrics.get("train_accuracy", 0.0),
-            final_train_mse=final_metrics.get("train_mse", 0.0),
-            final_train_mae=final_metrics.get("train_mae", 0.0),
+            final_train_accuracy=final_metrics.get("train_accuracy"),
+            final_train_mse=final_metrics.get("train_mse"),
+            final_train_mae=final_metrics.get("train_mae"),
             final_val_loss=final_metrics.get("val_loss", 0.0),
-            final_val_accuracy=final_metrics.get("val_accuracy", 0.0),
-            final_val_mse=final_metrics.get("val_mse", 0.0),
-            final_val_mae=final_metrics.get("val_mae", 0.0),
+            final_val_accuracy=final_metrics.get("val_accuracy"),
+            final_val_mse=final_metrics.get("val_mse"),
+            final_val_mae=final_metrics.get("val_mae"),
             training_history=self.training_history,
             flops_stats=self.flops_stats
         )
@@ -465,7 +488,28 @@ class HyperparameterSearch:
                     
                     print(f"  ✓ Completed in {result.duration_seconds:.1f}s")
                     print(f"  ✓ Best val_loss: {result.best_val_loss:.4f} (epoch {result.best_epoch})")
-                    print(f"  ✓ Best val_accuracy: {result.best_val_accuracy:.4f}")
+                    
+                    # Get task type for appropriate metric display
+                    task_type = self._get_task_type(model_name)
+                    
+                    # Conditionally print metrics based on task type and availability
+                    if task_type in ('classification', 'language_modeling', 'vision'):
+                        if result.best_val_accuracy is not None:
+                            print(f"  ✓ Best val_accuracy: {result.best_val_accuracy:.4f}")
+                    elif task_type in ('regression', 'time_series'):
+                        if result.best_val_mse is not None:
+                            print(f"  ✓ Best val_mse: {result.best_val_mse:.4f}")
+                        if result.best_val_mae is not None:
+                            print(f"  ✓ Best val_mae: {result.best_val_mae:.4f}")
+                    else:
+                        # Fallback: print all available metrics
+                        if result.best_val_accuracy is not None:
+                            print(f"  ✓ Best val_accuracy: {result.best_val_accuracy:.4f}")
+                        if result.best_val_mse is not None:
+                            print(f"  ✓ Best val_mse: {result.best_val_mse:.4f}")
+                        if result.best_val_mae is not None:
+                            print(f"  ✓ Best val_mae: {result.best_val_mae:.4f}")
+                    
                     if result.early_stopped:
                         print(f"  ⚠ Early stopped: {result.early_stop_reason}")
                     else:
@@ -494,17 +538,17 @@ class HyperparameterSearch:
                         early_stop_reason=f"Trial failed: {str(e)}",
                         best_epoch=0,
                         best_val_loss=float('inf'),
-                        best_val_accuracy=0.0,
-                        best_val_mse=float('inf'),
-                        best_val_mae=float('inf'),
+                        best_val_accuracy=None,
+                        best_val_mse=None,
+                        best_val_mae=None,
                         final_train_loss=0.0,
-                        final_train_accuracy=0.0,
-                        final_train_mse=0.0,
-                        final_train_mae=0.0,
+                        final_train_accuracy=None,
+                        final_train_mse=None,
+                        final_train_mae=None,
                         final_val_loss=0.0,
-                        final_val_accuracy=0.0,
-                        final_val_mse=0.0,
-                        final_val_mae=0.0,
+                        final_val_accuracy=None,
+                        final_val_mse=None,
+                        final_val_mae=None,
                         training_history=[],
                         error_message=str(e)
                     )
@@ -514,6 +558,9 @@ class HyperparameterSearch:
                     continue  # This is the crucial part - continue to next trial
                 
                 trial_counter += 1
+        
+        # Save final summary
+        self.logger.save_final_summary()
         
         # Print final summary
         total_trials = successful_trials + failed_trials
@@ -567,7 +614,6 @@ class HyperparameterSearch:
         torch.manual_seed(trial_seed)
         
         # Create datasets directly (following train.py pattern)
-        from data_pipeline import dataloader_factory
         train_ds = dataloader_factory(trial_config, split="train")
         val_ds = dataloader_factory(trial_config, split="val")
         test_ds = dataloader_factory(trial_config, split="test")
@@ -628,6 +674,20 @@ class HyperparameterSearch:
         target_col_idx = getattr(train_ds, 'target_col', 0)
         strategy = create_task_strategy(task_type, trial_config, scaler=scaler, target_col_idx=target_col_idx)
 
+        # Extract W&B config for this trial
+        wandb_cfg = trial_config.get("wandb", {})
+        use_wandb = wandb_cfg.get("use_wandb", False)
+        project_name = wandb_cfg.get("project_name", "tfn-hyperparameter-search")
+        
+        # Generate a unique experiment name for each trial
+        experiment_name = f"{model_name}_{trial_id}"
+        
+        # Debug: Print W&B configuration
+        if use_wandb:
+            print(f"    W&B enabled: project={project_name}, experiment={experiment_name}")
+        else:
+            print(f"    W&B disabled for this trial")
+        
         trainer = Trainer(
             model=model,
             train_loader=train_loader,
@@ -641,29 +701,38 @@ class HyperparameterSearch:
             grad_clip=float(training_config.get('grad_clip', 1.0)),  # Ensure grad_clip is float
             log_interval=int(training_config.get('log_interval', 100)),  # Ensure log_interval is int
             warmup_epochs=int(training_config.get('warmup_epochs', 2)),  # Ensure warmup_epochs is int
-            track_flops=True  # Enable FLOPs tracking for hyperparameter search
+            track_flops=True,  # Enable FLOPs tracking for hyperparameter search
+            
+            # Pass the W&B parameters
+            use_wandb=use_wandb,
+            project_name=project_name,
+            experiment_name=experiment_name
         )
         
         # Define epoch-end callback for hyperparameter search
         def on_epoch_end(epoch: int, metrics: Dict[str, Any], trainer_instance) -> bool:
             """Callback function for hyperparameter search epoch end."""
-            # Extract metrics
-            train_loss = metrics['train_loss']
-            train_acc = metrics['train_acc']
-            train_mse = metrics['train_mse']
-            train_mae = metrics['train_mae']
-            val_loss = metrics['val_loss']
-            val_acc = metrics['val_acc']
-            val_mse = metrics['val_mse']
-            val_mae = metrics['val_mae']
+            # Extract metrics with safe defaults
+            train_loss = metrics.get('train_loss', 0.0)
+            train_acc = metrics.get('train_acc')
+            train_mse = metrics.get('train_mse')
+            train_mae = metrics.get('train_mae')
+            val_loss = metrics.get('val_loss', 0.0)
+            val_acc = metrics.get('val_acc')
+            val_mse = metrics.get('val_mse')
+            val_mae = metrics.get('val_mae')
             
-            # Determine task type for appropriate metric printing
-            task = trial_config.get('task', 'classification')
+            # Get task type from model registry for appropriate metric printing
+            task = self._get_task_type(model_name)
             
             if task in ('regression', 'time_series'):
                 # Print regression metrics (MSE, MAE). train_loss is the same as train_mse for regression.
-                print(f"    Epoch {epoch:2d}: train_mse={train_mse:.4f}, train_mae={train_mae:.4f}, "
-                      f"val_mse={val_mse:.4f}, val_mae={val_mae:.4f}", flush=True)
+                train_mse_str = f"{train_mse:.4f}" if train_mse is not None else "None"
+                train_mae_str = f"{train_mae:.4f}" if train_mae is not None else "None"
+                val_mse_str = f"{val_mse:.4f}" if val_mse is not None else "None"
+                val_mae_str = f"{val_mae:.4f}" if val_mae is not None else "None"
+                print(f"    Epoch {epoch:2d}: train_mse={train_mse_str}, train_mae={train_mae_str}, "
+                      f"val_mse={val_mse_str}, val_mae={val_mae_str}", flush=True)
             else:
                 # Print classification metrics (accuracy) - handle None values
                 train_acc_str = f"{train_acc:.4f}" if train_acc is not None else "None"
@@ -710,6 +779,11 @@ class HyperparameterSearch:
         trial.flops_stats = flops_stats
         
         return trial.get_result()
+    
+    def _get_task_type(self, model_name: str) -> str:
+        """Get task type for a model from the registry."""
+        model_info = registry.get_model_config(model_name)
+        return model_info.get('task_type', 'classification')
     
     def _build_model(self, model_name: str, config: Dict[str, Any]) -> torch.nn.Module:
         """Build model with validation of required parameters."""

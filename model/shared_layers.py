@@ -248,6 +248,93 @@ class SinusoidalEmbeddings(PositionalEmbeddingStrategy):
         return self.forward(positions, **kwargs)
 
 
+class ContinuousPositionalEmbeddings(PositionalEmbeddingStrategy):
+    """Continuous positional embeddings for spatial coordinates (PDE datasets).
+    
+    This strategy handles continuous position values by using sinusoidal
+    embeddings with the actual position values as input.
+    
+    Parameters
+    ----------
+    max_len : int
+        Maximum sequence length for which to prepare embeddings.
+    embed_dim : int
+        Embedding dimensionality.
+    """
+    
+    def __init__(self, max_len: int, embed_dim: int, **kwargs) -> None:
+        super().__init__(max_len, embed_dim, **kwargs)
+        self.max_len = max_len
+        self.embed_dim = embed_dim
+    
+    def forward(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:
+        """
+        Forward pass for continuous positional embeddings.
+        
+        Args:
+            positions: Continuous position values [B, N, P] or [N, P] where P is spatial dimension
+            
+        Returns:
+            Continuous positional embeddings [B, N, D] or [N, D]
+        """
+        # Ensure positions has the right shape
+        if positions.dim() == 2:
+            positions = positions.unsqueeze(0)  # [N, P] -> [1, N, P]
+        
+        batch_size, seq_len, pos_dim = positions.shape
+        
+        # Create sinusoidal embeddings for each spatial dimension
+        embeddings = []
+        
+        for dim in range(pos_dim):
+            # Extract positions for this dimension
+            pos_vals = positions[:, :, dim]  # [B, N]
+            
+            # Create sinusoidal embeddings for this dimension
+            # Use different frequencies for different embedding dimensions
+            embed_dim_per_pos = self.embed_dim // pos_dim
+            if dim == pos_dim - 1:  # Last dimension gets remaining dimensions
+                embed_dim_per_pos = self.embed_dim - (pos_dim - 1) * (self.embed_dim // pos_dim)
+            
+            if embed_dim_per_pos > 0:
+                # Create sinusoidal embeddings
+                div_term = torch.exp(torch.arange(0, embed_dim_per_pos, 2).float() * 
+                                   -(torch.log(torch.tensor(10000.0)) / embed_dim_per_pos))
+                div_term = div_term.to(positions.device)
+                
+                # Expand positions for broadcasting
+                pos_expanded = pos_vals.unsqueeze(-1)  # [B, N, 1]
+                
+                # Create sinusoidal embeddings
+                pe = torch.zeros(batch_size, seq_len, embed_dim_per_pos, device=positions.device)
+                pe[:, :, 0::2] = torch.sin(pos_expanded * div_term)
+                pe[:, :, 1::2] = torch.cos(pos_expanded * div_term)
+                
+                embeddings.append(pe)
+        
+        # Concatenate embeddings from all spatial dimensions
+        if embeddings:
+            combined = torch.cat(embeddings, dim=-1)
+            # Ensure we have the right embedding dimension
+            if combined.shape[-1] < self.embed_dim:
+                # Pad with zeros if needed
+                padding = torch.zeros(batch_size, seq_len, self.embed_dim - combined.shape[-1], 
+                                    device=positions.device)
+                combined = torch.cat([combined, padding], dim=-1)
+            elif combined.shape[-1] > self.embed_dim:
+                # Truncate if needed
+                combined = combined[:, :, :self.embed_dim]
+        else:
+            # Fallback: create zero embeddings
+            combined = torch.zeros(batch_size, seq_len, self.embed_dim, device=positions.device)
+        
+        return combined
+
+    def __call__(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Make the object callable."""
+        return self.forward(positions, **kwargs)
+
+
 def create_positional_embedding_strategy(strategy_name: str, max_len: int, embed_dim: int, **kwargs) -> PositionalEmbeddingStrategy:
     """Factory function to create positional embedding strategies."""
     if strategy_name == "learned":
@@ -256,6 +343,8 @@ def create_positional_embedding_strategy(strategy_name: str, max_len: int, embed
         return TimeBasedEmbeddings(max_len, embed_dim, **kwargs)
     elif strategy_name == "sinusoidal":
         return SinusoidalEmbeddings(max_len, embed_dim, **kwargs)
+    elif strategy_name == "continuous":
+        return ContinuousPositionalEmbeddings(max_len, embed_dim, **kwargs)
     else:
         raise ValueError(f"Unknown positional embedding strategy: {strategy_name}")
 

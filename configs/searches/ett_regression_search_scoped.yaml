@@ -50,4 +50,9 @@ search_space:
 patience: 5
 min_epochs: 3
 seed: 42
-output_dir: "./search_results/ett_regression_scoped" 
+output_dir: "./search_results/ett_regression_scoped"
+
+# Weights & Biases Configuration
+wandb:
+  use_wandb: true  # Set to true to enable logging for this search
+  project_name: "tfn-ett-regression-search" 

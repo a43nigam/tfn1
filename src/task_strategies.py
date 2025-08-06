@@ -52,12 +52,18 @@ class ClassificationStrategy(TaskStrategy):
     def get_criterion(self) -> nn.Module:
         return nn.CrossEntropyLoss()
 
-    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         # Handle input format (single tensor or tuple with attention mask)
         if isinstance(x, tuple):
-            logits = model(x[0])
+            if positions is not None:
+                logits = model(x[0], positions=positions)
+            else:
+                logits = model(x[0])
         else:
-            logits = model(x)
+            if positions is not None:
+                logits = model(x, positions=positions)
+            else:
+                logits = model(x)
         
         # Handle sequence-level tasks where we need to average over sequence dimension
         if logits.dim() == 3 and logits.size(1) > 1:
@@ -99,8 +105,12 @@ class RegressionStrategy(TaskStrategy):
     def get_criterion(self) -> nn.Module:
         return nn.MSELoss()
 
-    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        preds = model(x)
+    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Pass positions to the model if available
+        if positions is not None:
+            preds = model(x, positions=positions)
+        else:
+            preds = model(x)
         
         # Handle shape mismatches between model output and targets
         # Model output: [B, output_len, output_dim]
@@ -172,18 +182,141 @@ class RegressionStrategy(TaskStrategy):
         return {"mse": mse_val, "mae": mae_val}
 
 
+class PDEStrategy(TaskStrategy):
+    """Strategy for physics-informed neural networks and PDE solving tasks.
+    
+    This strategy is specifically designed for PDE datasets and uses the relative L2 error
+    metric, which is the standard metric for evaluating PDE solvers in the literature.
+    """
+    
+    def __init__(self, scaler: Optional[Any] = None, target_col_idx: int = 0):
+        """
+        Initialize the PDE strategy.
+        
+        Args:
+            scaler: Optional scaler object for denormalization
+            target_col_idx: Index of the target column for denormalization
+        """
+        self.scaler = scaler
+        self.target_col_idx = target_col_idx
+        
+        # Raise a warning at initialization if the scaler is missing
+        if self.scaler is None:
+            warnings.warn(
+                "Scaler not provided to PDEStrategy. Metrics will be on a normalized scale.",
+                UserWarning,
+                stacklevel=2
+            )
+    
+    def get_criterion(self) -> nn.Module:
+        """Use MSE loss for PDE solving tasks."""
+        return nn.MSELoss()
+
+    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Process forward pass with explicit position support for PDE datasets."""
+        # Pass positions to the model if available
+        if positions is not None:
+            preds = model(x, positions=positions)
+        else:
+            preds = model(x)
+        
+        # Handle shape mismatches between model output and targets
+        # Model output: [B, output_len, output_dim]
+        # Target shape: [B, seq_len, input_dim] or [B, seq_len]
+        
+        # Ensure consistent shapes for loss and metric calculation
+        if y.dim() == 3:
+            # Target is [B, seq_len, input_dim]
+            if preds.shape[1] != y.shape[1] or preds.shape[2] != y.shape[2]:
+                # Reshape predictions to match target shape
+                if preds.shape[1] > y.shape[1]:
+                    # Truncate predictions to match target length
+                    preds = preds[:, :y.shape[1], :]
+                elif preds.shape[1] < y.shape[1]:
+                    # Pad predictions to match target length
+                    padding = preds[:, -1:, :].repeat(1, y.shape[1] - preds.shape[1], 1)
+                    preds = torch.cat([preds, padding], dim=1)
+                
+                # Handle output dimension mismatch
+                if preds.shape[2] != y.shape[2]:
+                    if preds.shape[2] > y.shape[2]:
+                        preds = preds[:, :, :y.shape[2]]
+                    else:
+                        padding = torch.zeros(preds.shape[0], preds.shape[1], y.shape[2] - preds.shape[2], device=preds.device)
+                        preds = torch.cat([preds, padding], dim=2)
+        
+        # Flatten for loss calculation (consistent approach)
+        y_flat = y.view(y.size(0), -1)
+        preds_flat = preds.view(preds.size(0), -1)
+        
+        loss = self.get_criterion()(preds_flat, y_flat)
+        return preds, loss
+
+    def calculate_metrics(self, preds: torch.Tensor, targets: torch.Tensor, **kwargs) -> Dict[str, float]:
+        """
+        Calculate PDE-specific metrics with proper denormalization if scaler is available.
+        
+        The primary metric is the relative L2 error, which is the standard metric
+        for evaluating PDE solvers in the literature.
+        
+        Args:
+            preds: Model predictions
+            targets: Ground truth targets
+            **kwargs: Additional arguments (ignored, scaler is stored in instance)
+            
+        Returns:
+            Dictionary containing relative L2 error, MSE, and MAE metrics
+        """
+        # Flatten predictions and targets for metric calculation
+        y_flat = targets.view(targets.size(0), -1)
+        preds_flat = preds.view(preds.size(0), -1)
+        
+        # Use the instance scaler if available
+        if self.scaler is not None:
+            # Get the mean and std for the target column ONLY
+            mean = self.scaler.mean_[self.target_col_idx]
+            std = self.scaler.scale_[self.target_col_idx]
+            
+            # Denormalize predictions and targets
+            # Formula: original = normalized * std + mean
+            preds_denorm = preds_flat * std + mean
+            y_denorm = y_flat * std + mean
+            
+            # Calculate metrics on the original scale
+            relative_l2_val = metrics.relative_l2_error(preds_denorm, y_denorm)
+            mse_val = metrics.mse(preds_denorm, y_denorm)
+            mae_val = metrics.mae(preds_denorm, y_denorm)
+        else:
+            # Fallback if scaler wasn't provided
+            relative_l2_val = metrics.relative_l2_error(preds_flat, y_flat)
+            mse_val = metrics.mse(preds_flat, y_flat)
+            mae_val = metrics.mae(preds_flat, y_flat)
+            
+        return {
+            "relative_l2": relative_l2_val,
+            "mse": mse_val, 
+            "mae": mae_val
+        }
+
+
 class LanguageModelingStrategy(TaskStrategy):
     """Strategy for language modeling tasks (next token prediction)."""
     
     def get_criterion(self) -> nn.Module:
         return nn.CrossEntropyLoss()
 
-    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         # For LM, x may be a tuple (input_ids, attention_mask)
         if isinstance(x, tuple):
-            logits = model(x[0])
+            if positions is not None:
+                logits = model(x[0], positions=positions)
+            else:
+                logits = model(x[0])
         else:
-            logits = model(x)
+            if positions is not None:
+                logits = model(x, positions=positions)
+            else:
+                logits = model(x)
         
         # logits: [B, L, vocab_size], y: [B, L]
         # Flatten for loss calculation

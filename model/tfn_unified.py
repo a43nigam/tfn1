@@ -84,7 +84,7 @@ class TFN(BaseSequenceModel):
         pos_min: float = 0.1,
         pos_max: float = 0.9,
         # New parameters for modular embeddings
-        positional_embedding_strategy: str = "learned",
+        positional_embedding_strategy: Optional[str] = None,
         calendar_features: Optional[List[str]] = None,
         feature_cardinalities: Optional[Dict[str, int]] = None,
     ) -> None:
@@ -93,6 +93,13 @@ class TFN(BaseSequenceModel):
         if task not in ("classification", "regression"):
             raise ValueError(f"Unknown task type: {task}")
         self.task = task
+
+        # Set default positional embedding strategy based on task
+        if positional_embedding_strategy is None:
+            if task == "regression":
+                positional_embedding_strategy = "continuous"  # Better for PDE datasets
+            else:
+                positional_embedding_strategy = "learned"  # Better for classification
 
         # Validate positional range --------------------------------------
         if not (0.0 <= pos_min < pos_max <= 1.0):

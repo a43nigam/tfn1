@@ -74,6 +74,7 @@ class Trainer:
         self.history = {
             "train_loss": [], "val_loss": [], "train_acc": [], "val_acc": [], 
             "train_mse": [], "val_mse": [], "train_mae": [], "val_mae": [], 
+            "train_relative_l2": [], "val_relative_l2": [],  # PDE-specific metrics
             "learning_rates": [], "epochs": []
         }
 
@@ -232,6 +233,7 @@ class Trainer:
         - For regression/copy tasks: {"inputs": ..., "targets": ...}
         - For classification tasks: {"inputs": ..., "labels": ...}
         - Optional "attention_mask" for NLP tasks
+        - Optional "positions" for PDE datasets
         
         This method assumes the standardized format and provides clear error messages.
         """
@@ -247,7 +249,12 @@ class Trainer:
             else:
                 model_input = inputs
             
-            return model_input, targets
+            # NEW: Check for explicit positions and pass them to the model
+            positions = batch.get('positions')
+            if positions is not None:
+                positions = positions.to(self.device)
+            
+            return model_input, targets, positions
         
         elif "inputs" in batch and "labels" in batch:
             # Classification tasks
@@ -260,7 +267,12 @@ class Trainer:
             else:
                 model_input = inputs
             
-            return model_input, labels
+            # NEW: Check for explicit positions and pass them to the model
+            positions = batch.get('positions')
+            if positions is not None:
+                positions = positions.to(self.device)
+            
+            return model_input, labels, positions
         
         else:
             # Enhanced error message with debugging information
@@ -270,6 +282,7 @@ class Trainer:
             error_msg += "  - 'inputs' and 'targets' (regression/copy tasks)\n"
             error_msg += "  - 'inputs' and 'labels' (classification tasks)\n"
             error_msg += "  - Optional 'attention_mask' for NLP tasks\n"
+            error_msg += "  - Optional 'positions' for PDE datasets\n"
             error_msg += f"Available keys: {available_keys}"
             raise ValueError(error_msg)
 
@@ -302,18 +315,19 @@ class Trainer:
         best_val_acc = 0.0
         best_val_mse = float('inf')
         best_val_mae = float('inf')
+        best_val_relative_l2 = float('inf')  # PDE-specific metric
         
         # Track learning rates for each epoch
         learning_rates = []
         
         for epoch in range(1, self.epochs + 1):
             # Training phase
-            train_loss, train_acc, train_mse, train_mae = self._run_epoch(self.train_loader, train=True)
+            train_loss, train_acc, train_mse, train_mae, train_relative_l2 = self._run_epoch(self.train_loader, train=True)
             
             # Validation phase
-            val_loss, val_acc, val_mse, val_mae = (None, None, None, None)
+            val_loss, val_acc, val_mse, val_mae, val_relative_l2 = (None, None, None, None, None)
             if self.val_loader is not None:
-                val_loss, val_acc, val_mse, val_mae = self._run_epoch(self.val_loader, train=False)
+                val_loss, val_acc, val_mse, val_mae, val_relative_l2 = self._run_epoch(self.val_loader, train=False)
             
             # Get current learning rate
             current_lr = self.optimizer.param_groups[0]['lr']
@@ -328,6 +342,8 @@ class Trainer:
             self.history["val_mse"].append(val_mse)
             self.history["train_mae"].append(train_mae)
             self.history["val_mae"].append(val_mae)
+            self.history["train_relative_l2"].append(train_relative_l2)
+            self.history["val_relative_l2"].append(val_relative_l2)
             self.history["learning_rates"].append(current_lr)
             self.history["epochs"].append(epoch)
             
@@ -341,6 +357,8 @@ class Trainer:
                 'val_mse': val_mse,
                 'train_mae': train_mae,
                 'val_mae': val_mae,
+                'train_relative_l2': train_relative_l2,
+                'val_relative_l2': val_relative_l2,
                 'learning_rate': current_lr
             }
             
@@ -360,6 +378,9 @@ class Trainer:
                 is_best = True
             if val_mae is not None and val_mae < best_val_mae:
                 best_val_mae = val_mae
+                is_best = True
+            if val_relative_l2 is not None and val_relative_l2 < best_val_relative_l2:
+                best_val_relative_l2 = val_relative_l2
                 is_best = True
             
             # Save checkpoint
@@ -414,13 +435,20 @@ class Trainer:
         n_batches = 0
         
         for batch_idx, batch in enumerate(loader, start=1):
-            x, y = self._unpack_batch(batch)
+            # Unpack three items now (x, y, positions)
+            unpacked = self._unpack_batch(batch)
+            if len(unpacked) == 3:
+                x, y, positions = unpacked
+            else:
+                x, y = unpacked
+                positions = None
+            
             if train:
                 self.optimizer.zero_grad(set_to_none=True)
                 
             with torch.set_grad_enabled(train):
                 # Delegate forward pass and loss calculation to strategy
-                logits, loss = self.strategy.process_forward_pass(self.model, x, y)
+                logits, loss = self.strategy.process_forward_pass(self.model, x, y, positions=positions)
                 
                 if train:
                     loss.backward()
@@ -456,8 +484,9 @@ class Trainer:
         avg_acc = avg_metrics.get("acc", None)
         avg_mse = avg_metrics.get("mse", None)
         avg_mae = avg_metrics.get("mae", None)
+        avg_relative_l2 = avg_metrics.get("relative_l2", None)  # PDE-specific metric
         
-        return avg_loss, avg_acc, avg_mse, avg_mae
+        return avg_loss, avg_acc, avg_mse, avg_mae, avg_relative_l2
 
     def load_checkpoint(self, checkpoint_path: str):
         """Load model from checkpoint."""

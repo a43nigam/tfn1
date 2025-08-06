@@ -441,3 +441,238 @@ seed: 42
 ```
 
 This integration provides comprehensive experiment tracking, making it easy to analyze results, compare experiments, and collaborate with team members. 
+
+# W&B Integration Guide for Hyperparameter Search
+
+This guide explains how to use Weights & Biases (W&B) with the Token Field Network hyperparameter search system.
+
+## Overview
+
+The hyperparameter search system now supports W&B integration for experiment tracking. Each trial in the search will be logged as a separate W&B run, allowing you to:
+
+- Track metrics across all trials
+- Compare different hyperparameter combinations
+- Visualize training curves
+- Organize experiments by project
+
+## Setup
+
+### 1. Install W&B
+```bash
+pip install wandb
+```
+
+### 2. Login to W&B
+```bash
+wandb login
+```
+
+## Configuration
+
+### Enable W&B in Search Config
+
+Add a `wandb` section to your search configuration:
+
+```yaml
+# Weights & Biases Configuration
+wandb:
+  use_wandb: true  # Set to true to enable logging
+  project_name: "tfn-hyperparameter-search"  # Your W&B project name
+```
+
+### Example Configuration
+
+```yaml
+# Example: configs/searches/ett_regression_search_scoped.yaml
+model_name: "enhanced_tfn_regressor"
+
+data:
+  dataset_name: "ett"
+  csv_path: "data/ETTh1.csv"
+  input_len: 96
+  output_len: 24
+
+training:
+  epochs: 30
+  patience: 5
+  batch_size: 32
+
+search_space:
+  models: ["enhanced_tfn_regressor", "tfn_regressor"]
+  params:
+    model:
+      embed_dim: [128, 256, 512]
+      kernel_type: ["rbf", "compact"]
+    training:
+      lr: [0.001, 0.01]
+
+# W&B Configuration
+wandb:
+  use_wandb: true
+  project_name: "tfn-ett-regression-search"
+```
+
+## Usage
+
+### Run Hyperparameter Search with W&B
+
+```bash
+python hyperparameter_search.py --config configs/searches/ett_regression_search_scoped.yaml
+```
+
+### What Gets Logged
+
+For each trial, W&B will log:
+
+- **Hyperparameters**: All swept parameters (embed_dim, lr, etc.)
+- **Metrics**: Training and validation metrics for each epoch
+- **System Info**: GPU usage, memory, etc.
+- **Model Info**: Parameter count, model architecture
+- **Training History**: Complete training curves
+
+### Trial Naming
+
+Each trial is automatically named as:
+```
+{model_name}_{trial_id}
+```
+
+Example: `enhanced_tfn_regressor_trial_001`
+
+## Features
+
+### 1. Automatic Trial Tracking
+- Each trial becomes a separate W&B run
+- Unique experiment names prevent conflicts
+- All hyperparameters are logged automatically
+
+### 2. Metric Logging
+- Training and validation losses
+- Task-specific metrics (accuracy for classification, MSE/MAE for regression)
+- Learning rate schedules
+- Early stopping information
+
+### 3. Experiment Organization
+- All trials from one search are grouped under the same project
+- Easy comparison between different hyperparameter combinations
+- Filtering and sorting by metrics
+
+### 4. Robust Error Handling
+- Failed trials are logged with error messages
+- Search continues even if individual trials fail
+- W&B runs are properly closed even on errors
+
+## Example Workflow
+
+### 1. Create Search Config
+```yaml
+# my_search.yaml
+model_name: "tfn_classifier"
+data:
+  dataset: "sst2"
+model:
+  vocab_size: 10000
+  embed_dim: 128
+  num_classes: 2
+training:
+  epochs: 10
+  lr: 0.001
+search_space:
+  models: ["tfn_classifier", "enhanced_tfn_classifier"]
+  params:
+    model.embed_dim: [128, 256]
+    training.lr: [0.001, 0.01]
+wandb:
+  use_wandb: true
+  project_name: "tfn-sentiment-analysis"
+```
+
+### 2. Run Search
+```bash
+python hyperparameter_search.py --config my_search.yaml
+```
+
+### 3. View Results in W&B
+- Open your W&B dashboard
+- Navigate to the "tfn-sentiment-analysis" project
+- Compare runs and find the best hyperparameters
+
+## Troubleshooting
+
+### W&B Not Logging
+1. Check that `use_wandb: true` is set in your config
+2. Verify you're logged in: `wandb login`
+3. Check the console output for W&B status messages
+
+### Trial Naming Conflicts
+- Each trial gets a unique ID automatically
+- No manual intervention needed
+
+### Memory Issues
+- W&B logging is lightweight
+- If you experience memory issues, try reducing batch size or search space
+
+## Best Practices
+
+### 1. Project Naming
+Use descriptive project names:
+- `tfn-{dataset}-{task}-search`
+- Example: `tfn-ett-regression-search`
+
+### 2. Search Space Design
+- Start with a small search space for testing
+- Use logarithmic scales for learning rates
+- Include a reasonable number of trials
+
+### 3. Monitoring
+- Monitor W&B dashboard during search
+- Check for failed trials
+- Use W&B's comparison features to analyze results
+
+### 4. Resource Management
+- Set appropriate `patience` and `min_epochs`
+- Use early stopping to save compute
+- Monitor GPU memory usage
+
+## Advanced Features
+
+### Custom Experiment Names
+You can modify the experiment naming in `hyperparameter_search.py`:
+
+```python
+# In _run_trial method
+experiment_name = f"{model_name}_{trial_id}_{parameters_hash}"
+```
+
+### Additional W&B Parameters
+The Trainer supports additional W&B parameters that can be extended:
+
+```python
+trainer = Trainer(
+    # ... other parameters ...
+    use_wandb=use_wandb,
+    project_name=project_name,
+    experiment_name=experiment_name,
+    # Additional parameters can be added here
+)
+```
+
+## Integration with Existing Workflows
+
+The W&B integration is designed to work seamlessly with existing training workflows:
+
+- Same configuration format as `train.py`
+- Compatible with all existing search configurations
+- No changes needed to model or data loading code
+- Backward compatible (W&B disabled by default)
+
+## Support
+
+For issues with W&B integration:
+
+1. Check the console output for W&B status messages
+2. Verify your W&B login status
+3. Test with a minimal search configuration
+4. Check the W&B dashboard for run status
+
+The integration is designed to be robust and continue working even if W&B is not available or configured. 
