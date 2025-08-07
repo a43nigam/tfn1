@@ -141,7 +141,11 @@ class EnhancedTFNModel(nn.Module):
                  num_heads: int = 8,
                  dropout: float = 0.1,
                  *,
-                 max_seq_len: int = 512):
+                 max_seq_len: int = 512,
+                 # ADD THESE NEW ARGUMENTS
+                 positional_embedding_strategy: str = "learned",
+                 calendar_features: Optional[List[str]] = None,
+                 feature_cardinalities: Optional[Dict[str, int]] = None):
         """
         Initialize enhanced TFN model.
         
@@ -157,6 +161,9 @@ class EnhancedTFNModel(nn.Module):
             num_heads: Number of attention heads
             dropout: Dropout rate
             max_seq_len: Maximum sequence length
+            positional_embedding_strategy: Strategy for positional embeddings ("learned", "sinusoidal", "calendar", etc.)
+            calendar_features: List of calendar features for calendar-based positional embeddings
+            feature_cardinalities: Dictionary mapping feature names to their cardinalities for categorical embeddings
         """
         super().__init__()
         self.vocab_size = vocab_size
@@ -181,11 +188,11 @@ class EnhancedTFNModel(nn.Module):
                 grid_size=grid_size,
                 num_steps=4,  # Default for UnifiedFieldDynamics
                 dropout=dropout,
-                positional_embedding_strategy="learned", # Default for EnhancedTFNLayer
-                calendar_features=None, # Default for EnhancedTFNLayer
-                feature_cardinalities={}, # Default for EnhancedTFNLayer
-                max_seq_len=max_seq_len, # Default for EnhancedTFNLayer
-                layer_norm_eps=1e-5 # Default for EnhancedTFNLayer
+                # PASS THE NEW ARGUMENTS DOWN
+                positional_embedding_strategy=positional_embedding_strategy,
+                calendar_features=calendar_features,
+                feature_cardinalities=feature_cardinalities,
+                max_seq_len=max_seq_len
             )
             for _ in range(num_layers)
         ])
@@ -323,7 +330,11 @@ class EnhancedTFNRegressor(nn.Module):
                  num_heads: int = 8,
                  dropout: float = 0.1,
                  *,
-                 max_seq_len: int = 512):
+                 max_seq_len: int = 512,
+                 # ADD THESE NEW ARGUMENTS
+                 positional_embedding_strategy: str = "learned",
+                 calendar_features: Optional[List[str]] = None,
+                 feature_cardinalities: Optional[Dict[str, int]] = None):
         """
         Initialize enhanced TFN regressor.
         
@@ -341,6 +352,9 @@ class EnhancedTFNRegressor(nn.Module):
             num_heads: Number of attention heads
             dropout: Dropout rate
             max_seq_len: Maximum sequence length
+            positional_embedding_strategy: Strategy for positional embeddings ("learned", "sinusoidal", "calendar", etc.)
+            calendar_features: List of calendar features for calendar-based positional embeddings
+            feature_cardinalities: Dictionary mapping feature names to their cardinalities for categorical embeddings
         """
         super().__init__()
         self.input_dim = input_dim
@@ -367,11 +381,11 @@ class EnhancedTFNRegressor(nn.Module):
                 grid_size=grid_size,
                 num_steps=4,  # Default for UnifiedFieldDynamics
                 dropout=dropout,
-                positional_embedding_strategy="learned", # Default for EnhancedTFNLayer
-                calendar_features=None, # Default for EnhancedTFNLayer
-                feature_cardinalities={}, # Default for EnhancedTFNLayer
-                max_seq_len=max_seq_len, # Default for EnhancedTFNLayer
-                layer_norm_eps=1e-5 # Default for EnhancedTFNLayer
+                # PASS THE NEW ARGUMENTS DOWN
+                positional_embedding_strategy=positional_embedding_strategy,
+                calendar_features=calendar_features,
+                feature_cardinalities=feature_cardinalities,
+                max_seq_len=max_seq_len
             )
             for _ in range(num_layers)
         ])
