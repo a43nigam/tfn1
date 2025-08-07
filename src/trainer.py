@@ -67,9 +67,18 @@ class Trainer:
         self.checkpoint_dir = checkpoint_dir
         self.log_hyperparams = log_hyperparams
         
-        # Create checkpoint directory
+        # Create checkpoint directory with error handling
         if self.save_checkpoints:
-            os.makedirs(self.checkpoint_dir, exist_ok=True)
+            try:
+                os.makedirs(self.checkpoint_dir, exist_ok=True)
+                print(f"✅ Checkpoint directory created/verified: {self.checkpoint_dir}")
+            except PermissionError:
+                print(f"❌ Permission denied creating checkpoint directory: {self.checkpoint_dir}")
+                print("   Consider setting checkpoint_dir to a writable location in your config")
+                raise
+            except Exception as e:
+                print(f"❌ Error creating checkpoint directory {self.checkpoint_dir}: {e}")
+                raise
         
         self.history = {
             "train_loss": [], "val_loss": [], "train_acc": [], "val_acc": [], 

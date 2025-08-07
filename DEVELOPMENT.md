@@ -1,288 +1,478 @@
-# Development Documentation
+# Token Field Network Development Guide
 
-This document contains key development information, architectural decisions, and implementation details for the Token Field Network project.
+This comprehensive guide covers all aspects of developing and using the Token Field Network (TFN) system.
 
-## 📋 Table of Contents
+## Table of Contents
 
-- [Architecture Overview](#architecture-overview)
-- [Data Pipeline](#data-pipeline)
-- [Model Registry](#model-registry)
-- [Training System](#training-system)
-- [Hyperparameter Search](#hyperparameter-search)
-- [Wandb Integration](#wandb-integration)
-- [Notebook Usage](#notebook-usage)
+1. [Quick Start](#quick-start)
+2. [Configuration](#configuration)
+3. [Training](#training)
+4. [Hyperparameter Search](#hyperparameter-search)
+5. [Data Loading](#data-loading)
+6. [Model Architecture](#model-architecture)
+7. [Normalization Strategies](#normalization-strategies)
+8. [Checkpoint Management](#checkpoint-management)
+9. [Weights & Biases Integration](#weights--biases-integration)
+10. [PDE Benchmarking](#pde-benchmarking)
+11. [Notebook Usage](#notebook-usage)
+12. [Troubleshooting](#troubleshooting)
 
-## 🏗️ Architecture Overview
+## Quick Start
 
-### Core Components
+### Basic Training
 
-The TFN architecture consists of three main phases:
+```bash
+# Train on ETT time series dataset
+python train.py --config configs/ett.yaml
 
-1. **Field Projection**: Tokens emit continuous fields across spatial domain
-2. **Field Evolution**: Fields evolve over time using physics-inspired dynamics
-3. **Field Sampling**: Evolved fields are sampled back to update tokens
+# Train on Burgers' equation
+python train.py --config configs/burgers.yaml
 
-### Key Design Principles
-
-- **Mathematical Rigor**: Fully differentiable field-based attention mechanism
-- **Physics-Inspired**: Leverages continuous field dynamics
-- **Modular Design**: Independent, testable components
-- **Numerical Stability**: Careful handling of tensor operations
-
-## 📊 Data Pipeline
-
-### Registry Pattern Implementation
-
-The data pipeline uses a centralized registry system that follows the same pattern as the model registry:
-
-```python
-# Data Loader Registry
-DATASET_REGISTRY = {
-    'synthetic': {
-        'class': SyntheticCopyDataset,
-        'task_type': 'copy',
-        'required_params': ['dataset_size', 'seq_len', 'vocab_size'],
-        'optional_params': ['pad_idx', 'task', 'num_classes'],
-        'defaults': {
-            'dataset_size': 1000,
-            'seq_len': 50,
-            'vocab_size': 20,
-            'pad_idx': 0,
-            'task': 'copy',
-            'num_classes': 2
-        },
-        'factory_method': None,
-        'split_method': None,
-        'description': 'Synthetic dataset for testing copy and classification tasks'
-    }
-}
+# Train with custom parameters
+python train.py --config configs/ett.yaml --set model.embed_dim=512 training.epochs=100
 ```
 
-### Benefits
-
-- **Extensibility**: Adding new datasets requires only registration
-- **Centralized Configuration**: All dataset parameters in one place
-- **Type Safety**: Required parameters are validated
-- **Default Values**: Sensible defaults for optional parameters
-
-## 🤖 Model Registry
-
-### Unified TFN Architecture
-
-The codebase provides a unified TFN model that handles both classification and regression tasks:
-
-```python
-from model.tfn_unified import TFN
-
-# Classification model
-classifier = TFN(
-    task="classification",
-    vocab_size=30522,
-    num_classes=2,
-    embed_dim=128,
-    kernel_type="rbf",
-    evolution_type="cnn"
-)
-
-# Regression model  
-regressor = TFN(
-    task="regression",
-    input_dim=7,
-    output_dim=1,
-    output_len=24,
-    embed_dim=128,
-    kernel_type="rbf",
-    evolution_type="cnn"
-)
-```
-
-### Available Models
-
-#### Core TFN Models
-- `tfn_classifier`: Text/sequence classification
-- `tfn_regressor`: Time series forecasting and regression
-- `tfn_language_model`: Language modeling and text generation
-- `tfn_vision`: 2D image classification
-
-#### Enhanced TFN Models
-- `enhanced_tfn_classifier`: Advanced classification with field interference
-- `enhanced_tfn_regressor`: Advanced regression with unified dynamics
-- `enhanced_tfn_language_model`: Advanced language modeling
-
-#### Baseline Models
-- `transformer_classifier/regressor`: Standard Transformer baselines
-- `performer_classifier/regressor`: Linear attention baselines
-
-## 🎯 Training System
-
-### Strategy Pattern
-
-The training system uses a strategy pattern for task-specific logic:
-
-```python
-class TaskStrategy(ABC):
-    @abstractmethod
-    def get_criterion(self) -> nn.Module:
-        pass
-    
-    @abstractmethod
-    def process_forward_pass(self, model, x, y) -> Tuple[torch.Tensor, torch.Tensor]:
-        pass
-    
-    @abstractmethod
-    def calculate_metrics(self, logits, targets, scaler=None) -> Dict[str, float]:
-        pass
-```
-
-### Available Strategies
-
-- **ClassificationStrategy**: For classification and NER tasks
-- **RegressionStrategy**: For regression and time-series tasks
-- **LanguageModelingStrategy**: For language modeling tasks
-
-### Callback System
-
-The Trainer supports epoch-end callbacks for custom behavior:
-
-```python
-def on_epoch_end(epoch: int, metrics: Dict[str, Any], trainer_instance) -> bool:
-    # Custom epoch-end logic
-    return True  # Continue training, False to stop early
-
-trainer.fit(on_epoch_end=on_epoch_end)
-```
-
-## 🔍 Hyperparameter Search
-
-### DRY Principle Implementation
-
-The hyperparameter search system eliminates code duplication by using the Trainer's `fit()` method with callbacks:
-
-```python
-# Define epoch-end callback for hyperparameter search
-def on_epoch_end(epoch: int, metrics: Dict[str, Any], trainer_instance) -> bool:
-    # Task-specific logging
-    # Trial logging
-    # Early stopping check
-    return True  # Continue training
-
-# Use the Trainer's fit method with our callback
-trainer.fit(on_epoch_end=on_epoch_end)
-```
-
-### Key Features
-
-- **No Code Duplication**: Uses Trainer's fit() method
-- **Task-Aware Logging**: Different metrics for regression vs classification
-- **Early Stopping**: Configurable patience and minimum epochs
-- **Scaler Integration**: Proper metric denormalization for regression
-- **FLOPS Tracking**: Performance monitoring
-
-### Metric Handling
-
-For regression tasks, the system correctly handles:
-- **Scaler Extraction**: Gets scaler from dataset for denormalization
-- **None Value Handling**: Properly formats None accuracy values
-- **Task-Specific Logging**: Shows MSE/MAE for regression, loss/accuracy for classification
-
-## 📈 Wandb Integration
-
-### Configuration
-
-Wandb integration is configured through the config file:
-
-```yaml
-wandb:
-  use_wandb: true
-  project_name: "tfn-time-series"
-  experiment_name: "ett-forecasting-v1"
-```
-
-### Features
-
-- **Automatic Tracking**: Training/validation metrics, model info, system info
-- **Configuration Options**: Flexible project and experiment naming
-- **Integration Points**: Works with CLI, notebooks, and hyperparameter search
-
-## 📓 Notebook Usage
-
-### Notebook-Friendly Functions
-
-The project provides notebook-friendly functions for easy experimentation:
+### Notebook Usage
 
 ```python
 from train import run_training
-from hyperparameter_search import run_search
+import yaml
 
-# Training
-history = run_training(config)
-
-# Hyperparameter search
-results = run_search(search_config)
-```
-
-### Example Usage
-
-```python
-# Load and modify config
+# Load and modify configuration
 with open('configs/ett.yaml', 'r') as f:
     config = yaml.safe_load(f)
 
 config['model']['embed_dim'] = 512
 config['training']['epochs'] = 100
 
-# Run training directly
+# Run training
+history = run_training(config, device="auto")
+```
+
+## Configuration
+
+### Configuration Structure
+
+```yaml
+model_name: enhanced_tfn_regressor
+task: time_series
+
+data:
+  dataset_name: ett
+  csv_path: data/ETTh1.csv
+  input_len: 96
+  output_len: 24
+  normalization_strategy: global  # global, instance, feature_wise
+
+model:
+  input_dim: 7
+  embed_dim: 256
+  output_dim: 1
+  output_len: 24
+  num_layers: 4
+  kernel_type: rbf  # rbf, film_learnable, etc.
+  evolution_type: diffusion  # diffusion, wave, schrodinger, cnn
+  interference_type: causal  # causal, standard
+  grid_size: 100
+  num_steps: 4
+  dropout: 0.1
+
+training:
+  batch_size: 64
+  lr: 1e-4
+  epochs: 10
+  warmup_epochs: 2
+  grad_clip: 1.0
+  weight_decay: 0.01
+  log_interval: 50
+
+wandb:
+  use_wandb: false
+  project_name: "tfn-experiments"
+  experiment_name: "my-experiment"
+```
+
+### Available Models
+
+- `enhanced_tfn_regressor`: Main regression model
+- `enhanced_tfn_classifier`: Classification model
+- `enhanced_tfn_language_model`: Language modeling
+- `transformer_classifier`: Baseline transformer
+- `performer_classifier`: Baseline performer
+- `lstm_regressor`: Baseline LSTM
+- `cnn_regressor`: Baseline CNN
+
+### Available Datasets
+
+- **Time Series**: `ett`, `jena`, `electricity`
+- **NLP**: `arxiv`, `pg19`, `imdb`, `wikitext`
+- **PDE**: `burgers`, `darcy`
+- **Classification**: `glue_sst2`, `glue_mrpc`, etc.
+
+## Training
+
+### Command Line Training
+
+```bash
+# Basic training
+python train.py --config configs/ett.yaml
+
+# Override parameters
+python train.py --config configs/ett.yaml --set model.embed_dim=512 training.epochs=100
+
+# Specify device
+python train.py --config configs/ett.yaml --device cuda
+
+# Use specific checkpoint directory
+python train.py --config configs/ett.yaml --set checkpoint_dir="./my_checkpoints"
+```
+
+### Training with RevIN (Reversible Instance Normalization)
+
+For time series forecasting with instance normalization:
+
+```yaml
+data:
+  normalization_strategy: instance  # This triggers RevIN wrapper
+
+model:
+  input_dim: 7  # Required for RevIN
+  # ... other model config
+```
+
+The system automatically wraps the model with RevIN when `normalization_strategy: instance` is used.
+
+## Hyperparameter Search
+
+### Command Line Search
+
+```bash
+# Run hyperparameter search
+python hyperparameter_search.py --config configs/searches/ett_regression_search.yaml
+
+# Override search parameters
+python hyperparameter_search.py --config configs/searches/ett_regression_search.yaml --set search_space.params.model.embed_dim.values="[128,256,512]"
+```
+
+### Notebook Search
+
+```python
+from hyperparameter_search import run_search
+import yaml
+
+# Load search configuration
+with open('configs/searches/ett_regression_search.yaml', 'r') as f:
+    search_config = yaml.safe_load(f)
+
+# Run search
+results = run_search(search_config, output_dir="./search_results")
+```
+
+## Data Loading
+
+### Time Series Data
+
+```python
+from data.timeseries_loader import ETTDataset
+
+# Load ETT dataset
+train_ds, val_ds, test_ds = ETTDataset.get_splits(
+    csv_path='data/ETTh1.csv',
+    input_len=96,
+    output_len=24,
+    normalization_strategy='global'  # global, instance, feature_wise
+)
+```
+
+### PDE Data
+
+```python
+from data.pde_loader import BurgersDataset, DarcyFlowDataset
+
+# Load Burgers' equation
+train_ds, val_ds, test_ds = BurgersDataset.get_splits(
+    file_path='burgers_data.mat',
+    target_timestep=10
+)
+
+# Load Darcy flow
+train_ds, val_ds, test_ds = DarcyFlowDataset.get_splits(
+    file_path='darcy_data.mat',
+    target_timestep=0  # Steady-state
+)
+```
+
+### NLP Data
+
+```python
+from data.pg19_loader import PG19Dataset
+
+# Load PG19 dataset
+train_ds, val_ds, test_ds = PG19Dataset.get_splits(
+    file_path='data/pg19.csv',
+    tokenizer_name='gpt2',
+    max_length=512
+)
+```
+
+## Model Architecture
+
+### Enhanced TFN Components
+
+1. **Field Projection**: Projects tokens to continuous fields using kernels
+2. **Field Evolution**: Evolves fields using PDE-inspired dynamics
+3. **Field Interference**: Handles token interactions
+4. **Field Sampling**: Samples evolved fields back to tokens
+
+### Kernel Types
+
+- `rbf`: Radial basis function kernel
+- `film_learnable`: Feature-wise linear modulation kernel
+- `data_dependent`: Data-dependent kernel
+
+### Evolution Types
+
+- `diffusion`: Diffusion equation evolution
+- `wave`: Wave equation evolution
+- `schrodinger`: Schrödinger equation evolution
+- `cnn`: Convolutional evolution
+- `spatially_varying_pde`: Spatially varying PDE evolution
+- `modernized_cnn`: Modernized CNN evolution
+
+### Interference Types
+
+- `causal`: Causal attention-like interference
+- `standard`: Standard interference
+
+## Normalization Strategies
+
+### Global Normalization
+
+```yaml
+data:
+  normalization_strategy: global
+```
+
+- Fits scaler on training data
+- Applies same transformation to all splits
+- Metrics reported on original scale
+
+### Instance Normalization
+
+```yaml
+data:
+  normalization_strategy: instance
+```
+
+- Normalizes each sequence independently
+- Automatically triggers RevIN wrapper
+- Metrics reported on original scale via RevIN
+
+### Feature-wise Normalization
+
+```yaml
+data:
+  normalization_strategy: feature_wise
+```
+
+- Normalizes each feature independently
+- Metrics reported on original scale
+
+## Checkpoint Management
+
+### Automatic Checkpoint Directory
+
+The system automatically handles checkpoint directories:
+
+```yaml
+# Default behavior
+checkpoint_dir: "checkpoints"  # Uses default
+
+# Custom directory
+checkpoint_dir: "./my_checkpoints/"
+
+# Kaggle environment (automatic fallback)
+checkpoint_dir: "checkpoints"  # Redirects to /kaggle/working/tfn_checkpoints
+```
+
+### Checkpoint Files
+
+- `experiment_YYYYMMDD_HHMMSS_latest.pt`: Latest model state
+- `experiment_YYYYMMDD_HHMMSS_best.pt`: Best model state
+- `experiment_YYYYMMDD_HHMMSS_epoch_N.pt`: Epoch N model state
+- `experiment_YYYYMMDD_HHMMSS_history.json`: Training history
+
+## Weights & Biases Integration
+
+### Installation
+
+```bash
+pip install wandb
+wandb login
+```
+
+### Configuration
+
+```yaml
+wandb:
+  use_wandb: true
+  project_name: "tfn-experiments"
+  experiment_name: "my-experiment"
+  tags: ["time-series", "forecasting"]
+  notes: "Experiment description"
+```
+
+### Usage
+
+```bash
+# Enable wandb
+python train.py --config configs/ett_wandb.yaml
+
+# Disable wandb
+python train.py --config configs/ett_wandb.yaml --set wandb.use_wandb=false
+```
+
+## PDE Benchmarking
+
+### Supported PDEs
+
+- **Burgers' Equation**: 1D shock wave formation
+- **Darcy Flow**: 2D porous media fluid flow
+- **Generic PDE**: Any PDE following FNO conventions
+
+### Usage
+
+```bash
+# Train on Burgers' equation
+python train.py --config configs/burgers.yaml
+
+# Train on Darcy flow
+python train.py --config configs/darcy.yaml
+```
+
+### Dataset Format
+
+PDE datasets are stored as `.mat` files:
+
+```matlab
+a = [n_samples, n_spatial_points];     % Initial conditions
+u = [n_samples, n_spatial_points, n_timesteps];  % Solutions
+x = [n_spatial_points] or [n_spatial_points, 2]; % Spatial grid
+```
+
+## Notebook Usage
+
+### Direct Function Calls
+
+```python
+from train import run_training
+from hyperparameter_search import run_search
+
+# Training
+history = run_training(config, device="auto")
+
+# Hyperparameter search
+results = run_search(search_config, output_dir="./results")
+```
+
+### Configuration Modification
+
+```python
+# Load and modify
+config = yaml.safe_load(open('configs/ett.yaml'))
+config['model']['embed_dim'] = 512
+config['training']['epochs'] = 100
+
+# Run with modified config
 history = run_training(config)
 ```
 
-## 🧪 Testing
+### Iterative Experimentation
 
-### Test Files
-
-The project includes comprehensive test files:
-
-- `test_ett_training.py`: ETT training example
-- `test_wandb_simple.py`: Wandb integration testing
-- `test_wandb_integration.py`: Comprehensive wandb testing
-- `test_data_registry.py`: Data loading testing
-- `test_notebook_functions.py`: Notebook functionality testing
-- `test_standardized_data_format.py`: Data format testing
-- `test_hyperparameter_search.py`: Hyperparameter search testing
-- `test_modular_implementation.py`: Modular implementation testing
-
-### Running Tests
-
-```bash
-# Run specific test
-python test_ett_training.py
-
-# Run all tests (if pytest is available)
-pytest test_*.py
+```python
+# Test different configurations
+for embed_dim in [128, 256, 512]:
+    for lr in [1e-4, 1e-3]:
+        config['model']['embed_dim'] = embed_dim
+        config['training']['lr'] = lr
+        
+        history = run_training(config, device="cpu")
+        final_loss = history['val_loss'][-1]
+        print(f"embed_dim={embed_dim}, lr={lr}: loss={final_loss}")
 ```
 
-## 🔧 Development Guidelines
+## Troubleshooting
 
-### Code Organization
+### Common Issues
 
-- **Core Components**: `core/` - Field projection, evolution, sampling
-- **Models**: `model/` - TFN implementations and registry
-- **Data**: `data/` - Dataset loaders and registry
-- **Training**: `src/` - Trainer, strategies, metrics
-- **Configuration**: `configs/` - YAML configuration files
+1. **Checkpoint Directory Permissions**
+   ```
+   ❌ Permission denied creating checkpoint directory
+   ```
+   Solution: Set `checkpoint_dir` to a writable location
 
-### Best Practices
+2. **Scaler Compatibility Warnings**
+   ```
+   ⚠️ Calculating regression metrics on a normalized scale
+   ```
+   Solution: Use `normalization_strategy: instance` with RevIN
 
-1. **DRY Principle**: Avoid code duplication
-2. **Strategy Pattern**: Use for task-specific logic
-3. **Registry Pattern**: Centralized configuration
-4. **Type Hints**: Include for all functions
-5. **Documentation**: Docstrings for all classes and methods
-6. **Testing**: Unit tests for all components
+3. **Memory Issues**
+   ```
+   CUDA out of memory
+   ```
+   Solution: Reduce `batch_size` or `grid_size`
 
-### Adding New Features
+4. **Import Errors**
+   ```
+   ModuleNotFoundError: No module named 'wandb'
+   ```
+   Solution: Install wandb or set `wandb.use_wandb: false`
 
-1. **Models**: Register in `model/registry.py`
-2. **Datasets**: Register in `data/registry.py`
-3. **Strategies**: Implement `TaskStrategy` interface
-4. **Configurations**: Add YAML files to `configs/`
-5. **Tests**: Create corresponding test files 
+### Debugging Tips
+
+1. **Check Configuration**
+   ```python
+   print(f"Model: {config['model_name']}")
+   print(f"Embed dim: {config['model']['embed_dim']}")
+   ```
+
+2. **Monitor Training**
+   ```python
+   history = run_training(config)
+   print(f"Final loss: {history['val_loss'][-1]}")
+   ```
+
+3. **Test Components**
+   ```python
+   from model.utils import build_model
+   model = build_model('enhanced_tfn_regressor', config['model'])
+   ```
+
+### Performance Optimization
+
+1. **Use GPU**: Set `device="cuda"`
+2. **Reduce Grid Size**: Lower `grid_size` for faster training
+3. **Batch Size**: Increase `batch_size` for better GPU utilization
+4. **Mixed Precision**: Consider using `torch.cuda.amp` for faster training
+
+## File Structure
+
+```
+TokenFieldNetwork/
+├── configs/           # Configuration files
+│   ├── *.yaml        # Dataset configurations
+│   ├── tests/        # Test configurations
+│   └── searches/     # Hyperparameter search configs
+├── core/             # Core TFN components
+├── data/             # Data loaders
+├── model/            # Model definitions
+├── src/              # Training utilities
+├── test/             # Unit tests
+├── checkpoints/      # Model checkpoints
+├── train.py          # Main training script
+├── hyperparameter_search.py  # Hyperparameter search
+└── README.md         # Main documentation
+```
+
+This guide covers all aspects of the Token Field Network system. For specific questions, refer to the individual component documentation or create an issue on the repository. 

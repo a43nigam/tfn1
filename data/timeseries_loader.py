@@ -246,25 +246,27 @@ class ETTDataset(Dataset):
         test_data = data[n_train+n_val:]
         
         # Apply normalization strategy
-        normalizer = create_normalization_strategy(normalization_strategy)
-        
-        if normalization_strategy == "global":
-            # Fit on train, apply to all splits
-            normalizer.fit(train_data)
-            train_data = normalizer.transform(train_data)
-            val_data = normalizer.transform(val_data)
-            test_data = normalizer.transform(test_data)
-        elif normalization_strategy == "feature_wise":
-            # Fit on train, apply to all splits
-            normalizer.fit(train_data)
-            train_data = normalizer.transform(train_data)
-            val_data = normalizer.transform(val_data)
-            test_data = normalizer.transform(test_data)
-        elif normalization_strategy == "instance":
-            # Step 1: Vectorize instance normalization - apply to entire dataset splits
-            train_data = normalizer.transform(train_data)
-            val_data = normalizer.transform(val_data)
-            test_data = normalizer.transform(test_data)
+        if normalization_strategy == "instance":
+            # For RevIN, we don't normalize in the data loader
+            # The RevIN wrapper will handle normalization
+            print("ℹ️  Using RevIN wrapper - skipping data normalization in loader")
+            normalizer = None
+        else:
+            # Apply normalization strategy as before
+            normalizer = create_normalization_strategy(normalization_strategy)
+            
+            if normalization_strategy == "global":
+                # Fit on train, apply to all splits
+                normalizer.fit(train_data)
+                train_data = normalizer.transform(train_data)
+                val_data = normalizer.transform(val_data)
+                test_data = normalizer.transform(test_data)
+            elif normalization_strategy == "feature_wise":
+                # Fit on train, apply to all splits
+                normalizer.fit(train_data)
+                train_data = normalizer.transform(train_data)
+                val_data = normalizer.transform(val_data)
+                test_data = normalizer.transform(test_data)
         
         # Apply additional instance normalization if requested (for backward compatibility)
         if instance_normalize and normalization_strategy != "instance":

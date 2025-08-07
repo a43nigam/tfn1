@@ -19,7 +19,7 @@ from model import registry
 __all__ = ["build_model"]
 
 
-def build_model(model_name: str, model_cfg: Dict[str, Any], data_cfg: Dict[str, Any] | None = None) -> nn.Module:  # noqa: D401,E501
+def build_model(model_name: str, model_cfg: Dict[str, Any], data_cfg: Dict[str, Any] | None = None) -> nn.Module:
     """Instantiate *model_name* with *model_cfg*.
 
     The logic is identical for both *train.py* and *hyperparameter_search.py*;

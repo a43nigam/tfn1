@@ -146,7 +146,7 @@ class RegressionStrategy(TaskStrategy):
 
     def calculate_metrics(self, preds: torch.Tensor, targets: torch.Tensor, **kwargs) -> Dict[str, float]:
         """
-        Calculate regression metrics with proper denormalization if scaler is available.
+        Calculate regression metrics with robust denormalization for any scaler type.
         
         Args:
             preds: Model predictions
@@ -156,29 +156,40 @@ class RegressionStrategy(TaskStrategy):
         Returns:
             Dictionary containing MSE and MAE metrics
         """
-        # Flatten predictions and targets for metric calculation
+        from data.timeseries_loader import InstanceNormalizer, FeatureWiseNormalizer
+
         y_flat = targets.view(targets.size(0), -1)
         preds_flat = preds.view(preds.size(0), -1)
         
-        # Use the instance scaler if available
+        # Default to calculating on the normalized scale
+        mse_val = metrics.mse(preds_flat, y_flat)
+        mae_val = metrics.mae(preds_flat, y_flat)
+
+        # Attempt to de-normalize only if a compatible scaler is present
         if self.scaler is not None:
-            # Get the mean and std for the target column ONLY
-            mean = self.scaler.mean_[self.target_col_idx]
-            std = self.scaler.scale_[self.target_col_idx]
-            
-            # Denormalize predictions and targets
-            # Formula: original = normalized * std + mean
-            preds_denorm = preds_flat * std + mean
-            y_denorm = y_flat * std + mean
-            
-            # Calculate metrics on the original scale
-            mse_val = metrics.mse(preds_denorm, y_denorm)
-            mae_val = metrics.mae(preds_denorm, y_denorm)
-        else:
-            # Fallback if scaler wasn't provided
-            mse_val = metrics.mse(preds_flat, y_flat)
-            mae_val = metrics.mae(preds_flat, y_flat)
-            
+            try:
+                if hasattr(self.scaler, 'mean_'): # Handles GlobalStandardScaler
+                    mean = self.scaler.mean_[self.target_col_idx]
+                    std = self.scaler.scale_[self.target_col_idx]
+                elif hasattr(self.scaler, 'feature_means'): # Handles FeatureWiseNormalizer
+                    mean = self.scaler.feature_means[self.target_col_idx]
+                    std = self.scaler.feature_stds[self.target_col_idx]
+                else: # Handles InstanceNormalizer or unknown scalers
+                    mean, std = None, None
+
+                if mean is not None and std is not None:
+                    preds_denorm = preds_flat * std + mean
+                    y_denorm = y_flat * std + mean
+                    mse_val = metrics.mse(preds_denorm, y_denorm)
+                    mae_val = metrics.mae(preds_denorm, y_denorm)
+                else:
+                    warnings.warn(
+                        "Calculating regression metrics on a normalized scale. De-normalization not supported for this scaler.",
+                        UserWarning, stacklevel=2
+                    )
+            except Exception as e:
+                warnings.warn(f"Failed to de-normalize metrics due to an error: {e}", UserWarning, stacklevel=2)
+
         return {"mse": mse_val, "mae": mae_val}
 
 
@@ -254,7 +265,7 @@ class PDEStrategy(TaskStrategy):
 
     def calculate_metrics(self, preds: torch.Tensor, targets: torch.Tensor, **kwargs) -> Dict[str, float]:
         """
-        Calculate PDE-specific metrics with proper denormalization if scaler is available.
+        Calculate PDE-specific metrics with robust denormalization for any scaler type.
         
         The primary metric is the relative L2 error, which is the standard metric
         for evaluating PDE solvers in the literature.
@@ -267,30 +278,41 @@ class PDEStrategy(TaskStrategy):
         Returns:
             Dictionary containing relative L2 error, MSE, and MAE metrics
         """
-        # Flatten predictions and targets for metric calculation
+        from data.timeseries_loader import InstanceNormalizer, FeatureWiseNormalizer
+
         y_flat = targets.view(targets.size(0), -1)
         preds_flat = preds.view(preds.size(0), -1)
         
-        # Use the instance scaler if available
+        # Default to calculating on the normalized scale
+        relative_l2_val = metrics.relative_l2_error(preds_flat, y_flat)
+        mse_val = metrics.mse(preds_flat, y_flat)
+        mae_val = metrics.mae(preds_flat, y_flat)
+
+        # Attempt to de-normalize only if a compatible scaler is present
         if self.scaler is not None:
-            # Get the mean and std for the target column ONLY
-            mean = self.scaler.mean_[self.target_col_idx]
-            std = self.scaler.scale_[self.target_col_idx]
-            
-            # Denormalize predictions and targets
-            # Formula: original = normalized * std + mean
-            preds_denorm = preds_flat * std + mean
-            y_denorm = y_flat * std + mean
-            
-            # Calculate metrics on the original scale
-            relative_l2_val = metrics.relative_l2_error(preds_denorm, y_denorm)
-            mse_val = metrics.mse(preds_denorm, y_denorm)
-            mae_val = metrics.mae(preds_denorm, y_denorm)
-        else:
-            # Fallback if scaler wasn't provided
-            relative_l2_val = metrics.relative_l2_error(preds_flat, y_flat)
-            mse_val = metrics.mse(preds_flat, y_flat)
-            mae_val = metrics.mae(preds_flat, y_flat)
+            try:
+                if hasattr(self.scaler, 'mean_'): # Handles GlobalStandardScaler
+                    mean = self.scaler.mean_[self.target_col_idx]
+                    std = self.scaler.scale_[self.target_col_idx]
+                elif hasattr(self.scaler, 'feature_means'): # Handles FeatureWiseNormalizer
+                    mean = self.scaler.feature_means[self.target_col_idx]
+                    std = self.scaler.feature_stds[self.target_col_idx]
+                else: # Handles InstanceNormalizer or unknown scalers
+                    mean, std = None, None
+
+                if mean is not None and std is not None:
+                    preds_denorm = preds_flat * std + mean
+                    y_denorm = y_flat * std + mean
+                    relative_l2_val = metrics.relative_l2_error(preds_denorm, y_denorm)
+                    mse_val = metrics.mse(preds_denorm, y_denorm)
+                    mae_val = metrics.mae(preds_denorm, y_denorm)
+                else:
+                    warnings.warn(
+                        "Calculating PDE metrics on a normalized scale. De-normalization not supported for this scaler.",
+                        UserWarning, stacklevel=2
+                    )
+            except Exception as e:
+                warnings.warn(f"Failed to de-normalize metrics due to an error: {e}", UserWarning, stacklevel=2)
             
         return {
             "relative_l2": relative_l2_val,

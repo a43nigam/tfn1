@@ -329,6 +329,7 @@ class EnhancedTFNRegressor(nn.Module):
                  grid_size: int = 100,
                  num_heads: int = 8,
                  dropout: float = 0.1,
+                 num_steps: int = 4,  # <-- ADD THIS ARGUMENT WITH A DEFAULT
                  *,
                  max_seq_len: int = 512,
                  # ADD THESE NEW ARGUMENTS
@@ -351,6 +352,7 @@ class EnhancedTFNRegressor(nn.Module):
             grid_size: Number of grid points
             num_heads: Number of attention heads
             dropout: Dropout rate
+            num_steps: Number of evolution steps
             max_seq_len: Maximum sequence length
             positional_embedding_strategy: Strategy for positional embeddings ("learned", "sinusoidal", "calendar", etc.)
             calendar_features: List of calendar features for calendar-based positional embeddings
@@ -379,7 +381,7 @@ class EnhancedTFNRegressor(nn.Module):
                 evolution_type=evolution_type,
                 interference_type=interference_type,
                 grid_size=grid_size,
-                num_steps=4,  # Default for UnifiedFieldDynamics
+                num_steps=num_steps,  # <-- PASS IT HERE
                 dropout=dropout,
                 # PASS THE NEW ARGUMENTS DOWN
                 positional_embedding_strategy=positional_embedding_strategy,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import yaml
 import torch
+import os
 from data_pipeline import get_dataloader
 from model import registry
 from src.trainer import Trainer
@@ -335,6 +336,23 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
     model_info = registry.get_model_config(model_name)
     task_type = model_info['task_type']
 
+    # --- Conditionally wrap the model with RevIN based on data config ---
+    model_to_train = model
+    if config.get('data', {}).get('normalization_strategy') == 'instance':
+        try:
+            from model.wrappers import RevinModel
+            
+            # Ensure this is a regression task with a valid input_dim
+            if 'input_dim' in model_cfg:
+                model_to_train = RevinModel(base_model=model, num_features=model_cfg['input_dim'])
+                print("✅ Applied RevIN wrapper to the model.")
+            else:
+                print("⚠️  Warning: 'instance' normalization selected, but model is not configured for regression. Skipping RevIN.")
+        except ImportError:
+            print("⚠️  Warning: RevIN wrapper not available. Using base model without wrapper.")
+        except Exception as e:
+            print(f"⚠️  Warning: Failed to apply RevIN wrapper: {e}. Using base model.")
+
     # --- Get scaler from dataset for regression tasks ---
     scaler = getattr(train_ds, 'scaler', None)
     target_col_idx = getattr(train_ds, 'target_col', 0)
@@ -343,7 +361,7 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
     strategy = create_task_strategy(task_type, config, scaler=scaler, target_col_idx=target_col_idx)
 
     # Print comprehensive training information
-    print_training_info(config, model_name, model_info, model, device, train_cfg)
+    print_training_info(config, model_name, model_info, model_to_train, device, train_cfg)
 
     lr_value = train_cfg.get("lr", 1e-3)
     if isinstance(lr_value, str):
@@ -352,9 +370,17 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
         except ValueError:
             raise ValueError(f"Invalid learning rate value: {lr_value!r}")
 
+    # Determine checkpoint directory with Kaggle environment detection
+    checkpoint_dir = config.get("checkpoint_dir", "checkpoints")
+    
+    # If we can't write to the specified directory, try Kaggle working directory
+    if os.path.exists('/kaggle/working') and not os.access(checkpoint_dir, os.W_OK):
+        checkpoint_dir = '/kaggle/working/tfn_checkpoints'
+        print(f"Warning: Using Kaggle working directory for checkpoints: {checkpoint_dir}")
+    
     # Create trainer
     trainer = Trainer(
-        model=model,
+        model=model_to_train, # Use the model_to_train here
         train_loader=train_loader,
         val_loader=val_loader,
         strategy=strategy,
@@ -369,7 +395,9 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
         # ADD THESE LINES to pass the W&B settings to the Trainer
         use_wandb=wandb_cfg.get('use_wandb', False),
         project_name=wandb_cfg.get('project_name', 'tfn-experiments'),
-        experiment_name=wandb_cfg.get('experiment_name')
+        experiment_name=wandb_cfg.get('experiment_name'),
+        # ADD THIS LINE to pass the checkpoint directory
+        checkpoint_dir=checkpoint_dir
     )
 
     # Run training and return history
