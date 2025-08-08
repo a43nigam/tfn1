@@ -336,9 +336,12 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
     model_info = registry.get_model_config(model_name)
     task_type = model_info['task_type']
 
-    # --- Conditionally wrap the model with RevIN based on data config ---
+    # --- Conditionally wrap the model with RevIN or PARN based on data config ---
     model_to_train = model
-    if config.get('data', {}).get('normalization_strategy') == 'instance':
+    normalization_strategy = config.get('data', {}).get('normalization_strategy')
+    
+    if normalization_strategy == 'instance':
+        # Existing RevIN logic 
         try:
             from model.wrappers import RevinModel
             
@@ -352,6 +355,32 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
             print("⚠️  Warning: RevIN wrapper not available. Using base model without wrapper.")
         except Exception as e:
             print(f"⚠️  Warning: Failed to apply RevIN wrapper: {e}. Using base model.")
+            
+    elif normalization_strategy == 'parn':
+        try:
+            from model.wrappers import PARNModel
+            parn_mode = config.get('data', {}).get('parn_mode', 'location')
+            original_input_dim = model_cfg['input_dim']
+            
+            # Dynamically calculate the new input dimension
+            if parn_mode == 'location' or parn_mode == 'scale':
+                model_cfg['input_dim'] = original_input_dim * 2
+            elif parn_mode == 'full':
+                model_cfg['input_dim'] = original_input_dim * 3
+
+            print(f"✅ Applying PARN wrapper (mode='{parn_mode}'). Model input_dim adjusted to {model_cfg['input_dim']}.")
+            
+            # Re-build the model with the adjusted input_dim
+            # This ensures the base model has correctly sized layers
+            model = build_model(model_name, model_cfg, data_cfg).to(device)
+            
+            # Wrap the newly built model
+            model_to_train = PARNModel(base_model=model, num_features=original_input_dim, mode=parn_mode)
+            
+        except ImportError:
+            print("⚠️ Warning: PARN wrapper not available. Using base model.")
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to apply PARN wrapper: {e}. Using base model.")
 
     # --- Get scaler from dataset for regression tasks ---
     scaler = getattr(train_ds, 'scaler', None)

@@ -15,6 +15,7 @@ from typing import Dict, Any
 import torch.nn as nn
 
 from model import registry
+from model.wrappers import create_revin_wrapper, create_parn_wrapper
 
 __all__ = ["build_model"]
 
@@ -67,4 +68,38 @@ def build_model(model_name: str, model_cfg: Dict[str, Any], data_cfg: Dict[str, 
         for param in dropped:
             print(f"   - {param}: {model_args[param]}")
 
-    return model_cls(**filtered_args) 
+    # Build the base model
+    base_model = model_cls(**filtered_args)
+    
+    # ---- apply normalization wrappers if specified ------------------------
+    normalization_config = model_cfg.get("normalization", {})
+    normalization_type = normalization_config.get("type", None)
+    
+    if normalization_type is not None:
+        # Determine number of features for normalization
+        num_features = normalization_config.get("num_features")
+        if num_features is None:
+            # Try to infer from model configuration
+            if "input_dim" in model_cfg:
+                num_features = model_cfg["input_dim"]
+            elif "embed_dim" in model_cfg:
+                num_features = model_cfg["embed_dim"]
+            else:
+                raise ValueError(
+                    f"Cannot determine num_features for {normalization_type} normalization. "
+                    f"Please specify 'num_features' in the normalization config."
+                )
+        
+        if normalization_type.lower() == "revin":
+            print(f"🔧 Wrapping model with RevIN normalization (num_features={num_features})")
+            return create_revin_wrapper(base_model, num_features)
+        
+        elif normalization_type.lower() == "parn":
+            mode = normalization_config.get("mode", "location")
+            print(f"🔧 Wrapping model with PARN normalization (mode={mode})")
+            return create_parn_wrapper(base_model, num_features, mode)
+        
+        else:
+            raise ValueError(f"Unknown normalization type: {normalization_type}. Use 'revin' or 'parn'")
+    
+    return base_model 

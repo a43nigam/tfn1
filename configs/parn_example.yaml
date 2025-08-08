@@ -1,0 +1,48 @@
+# Example configuration for PARN (Physics-Aware Reversible Normalization)
+# This demonstrates how to use PARN with TFN models for time series forecasting
+
+model_name: "tfn_regressor"
+
+# Model configuration
+model:
+  input_dim: 7  # Number of input features
+  embed_dim: 64
+  output_dim: 7  # Number of output features
+  output_len: 24  # Forecast horizon
+  kernel_type: "rbf"
+  evolution_type: "pde"  # Physics-inspired evolution
+  num_layers: 2
+  grid_size: 100
+  time_steps: 3
+  dropout: 0.1
+  
+  # PARN normalization configuration
+  normalization:
+    type: "parn"  # Use PARN instead of RevIN
+    mode: "location"  # Remove location (mean) only, preserve scale
+    num_features: 7  # Number of features to normalize
+
+# Data configuration
+data:
+  dataset_name: "ETT"
+  file_path: "data/ETTh1.csv"
+  input_len: 96
+  output_len: 24
+  batch_size: 32
+  train_ratio: 0.7
+  val_ratio: 0.2
+  test_ratio: 0.1
+
+# Training configuration
+training:
+  epochs: 100
+  lr: 1e-4
+  device: "auto"
+  early_stopping_patience: 10
+  save_best: true
+
+# Output configuration
+output_dir: "checkpoints/parn_experiment"
+
+# Task configuration
+task_type: "time_series" 
