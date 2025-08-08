@@ -17,13 +17,13 @@ from core.field_evolution import FieldEvolver, DynamicFieldPropagator, create_fi
 from core.field_sampling import FieldSampler
 from core.field_interference import TokenFieldInterference, create_field_interference
 from core.unified_field_dynamics import UnifiedFieldDynamics
-from model.shared_layers import create_positional_embedding_strategy  # NEW
 
 
 class EnhancedTFNLayer(nn.Module):
     """
     Enhanced TFN Layer using Unified Field Dynamics.
     Integrates field projection, unified field dynamics (evolution + interference + constraints), and field sampling.
+    This layer is now a pure processing block that operates on already position-aware features.
     """
     def __init__(
                  self,
@@ -35,13 +35,6 @@ class EnhancedTFNLayer(nn.Module):
                  grid_size: int = 100,
                  num_steps: int = 4,
                  dropout: float = 0.1,
-                 *,
-                 # Modular positional embeddings
-                 positional_embedding_strategy: str = "learned",
-                 calendar_features: Optional[list[str]] = None,
-                 feature_cardinalities: Optional[dict[str, int]] = None,
-                 max_seq_len: int = 512,
-                 # Misc
                  layer_norm_eps: float = 1e-5,
                  **kwargs):
         super().__init__()
@@ -72,34 +65,39 @@ class EnhancedTFNLayer(nn.Module):
         self.output_proj = nn.Linear(embed_dim, embed_dim)
         self.dropout = nn.Dropout(dropout)
         
-        # Position embeddings (now modular via shared factory)
-        self.pos_embeddings = create_positional_embedding_strategy(
-            positional_embedding_strategy,
-            max_len=max_seq_len,
-            embed_dim=embed_dim,
-            calendar_features=calendar_features,
-            feature_cardinalities=feature_cardinalities,
-        )
     def forward(self, 
-                embeddings: torch.Tensor,      # [B, N, D] token embeddings
-                positions: torch.Tensor,       # [B, N, P] token positions
-                grid_points: Optional[torch.Tensor] = None,
-                add_pos_emb: bool = True) -> torch.Tensor:
-        batch_size, num_tokens, embed_dim = embeddings.shape
+                x: torch.Tensor,  # [B, N, D] position-aware token embeddings
+                positions: torch.Tensor,  # [B, N, P] token positions
+                grid_points: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Forward pass through enhanced TFN layer.
+        
+        Args:
+            x: Position-aware token embeddings [B, N, D]
+            positions: Token positions [B, N, P]
+            grid_points: Optional grid points for field projection
+            
+        Returns:
+            Enhanced embeddings [B, N, D]
+        """
+        batch_size, num_tokens, embed_dim = x.shape
         if grid_points is None:
             grid_points = self._generate_grid_points(batch_size)
-        # Optionally add positional embeddings before projection
-        if add_pos_emb and self.pos_embeddings is not None:
-            embeddings = embeddings + self.pos_embeddings(positions, calendar_features=None)
+
+        # The input 'x' is now used directly - no new positional embeddings are added
+        # as the input is already position-aware from the main model
 
         # Step 1: Field Projection
-        field = self.field_projector(embeddings, positions, grid_points)  # [B, M, D]
+        field = self.field_projector(x, positions, grid_points)  # [B, M, D]
         # Step 2: Unified Field Dynamics (evolution + interference + constraints)
         field_evolved = self.unified_dynamics(field, positions)
         # Step 3: Field Sampling
         enhanced_embeddings = self.field_sampler(field_evolved, grid_points, positions)  # [B, N, D]
-        # Residual connection and layer normalization
-        enhanced_embeddings = self.layer_norm1(enhanced_embeddings + embeddings)
+        
+        # Correct residual connection: add the original position-aware input 'x'
+        residual = x
+        enhanced_embeddings = self.layer_norm1(enhanced_embeddings + residual)
+        
         # Output projection
         output = self.output_proj(enhanced_embeddings)
         output = self.dropout(output)
@@ -118,7 +116,7 @@ class EnhancedTFNLayer(nn.Module):
         grid = grid.unsqueeze(0).expand(batch_size, -1, -1)
         return grid
     def get_physics_constraints(self) -> Dict[str, torch.Tensor]:
-        return self.unified_dynamics.get_physics_constraints()
+        return self.unified_dynamics.get_stability_metrics()
 
 
 class EnhancedTFNModel(nn.Module):
@@ -141,11 +139,7 @@ class EnhancedTFNModel(nn.Module):
                  num_heads: int = 8,
                  dropout: float = 0.1,
                  *,
-                 max_seq_len: int = 512,
-                 # ADD THESE NEW ARGUMENTS
-                 positional_embedding_strategy: str = "learned",
-                 calendar_features: Optional[List[str]] = None,
-                 feature_cardinalities: Optional[Dict[str, int]] = None):
+                 max_seq_len: int = 512):
         """
         Initialize enhanced TFN model.
         
@@ -161,9 +155,6 @@ class EnhancedTFNModel(nn.Module):
             num_heads: Number of attention heads
             dropout: Dropout rate
             max_seq_len: Maximum sequence length
-            positional_embedding_strategy: Strategy for positional embeddings ("learned", "sinusoidal", "calendar", etc.)
-            calendar_features: List of calendar features for calendar-based positional embeddings
-            feature_cardinalities: Dictionary mapping feature names to their cardinalities for categorical embeddings
         """
         super().__init__()
         self.vocab_size = vocab_size
@@ -187,12 +178,7 @@ class EnhancedTFNModel(nn.Module):
                 interference_type=interference_type,
                 grid_size=grid_size,
                 num_steps=4,  # Default for UnifiedFieldDynamics
-                dropout=dropout,
-                # PASS THE NEW ARGUMENTS DOWN
-                positional_embedding_strategy=positional_embedding_strategy,
-                calendar_features=calendar_features,
-                feature_cardinalities=feature_cardinalities,
-                max_seq_len=max_seq_len
+                dropout=dropout
             )
             for _ in range(num_layers)
         ])
@@ -266,10 +252,10 @@ class EnhancedTFNModel(nn.Module):
     
     def get_physics_constraints(self) -> Dict[str, torch.Tensor]:
         """
-        Get physics constraint losses from all layers.
+        Get stability metrics from all layers.
         
         Returns:
-            Dictionary of constraint losses
+            Dictionary of stability metrics
         """
         constraints = {}
         
@@ -329,13 +315,9 @@ class EnhancedTFNRegressor(nn.Module):
                  grid_size: int = 100,
                  num_heads: int = 8,
                  dropout: float = 0.1,
-                 num_steps: int = 4,  # <-- ADD THIS ARGUMENT WITH A DEFAULT
+                 num_steps: int = 4,
                  *,
-                 max_seq_len: int = 512,
-                 # ADD THESE NEW ARGUMENTS
-                 positional_embedding_strategy: str = "learned",
-                 calendar_features: Optional[List[str]] = None,
-                 feature_cardinalities: Optional[Dict[str, int]] = None):
+                 max_seq_len: int = 512):
         """
         Initialize enhanced TFN regressor.
         
@@ -354,9 +336,6 @@ class EnhancedTFNRegressor(nn.Module):
             dropout: Dropout rate
             num_steps: Number of evolution steps
             max_seq_len: Maximum sequence length
-            positional_embedding_strategy: Strategy for positional embeddings ("learned", "sinusoidal", "calendar", etc.)
-            calendar_features: List of calendar features for calendar-based positional embeddings
-            feature_cardinalities: Dictionary mapping feature names to their cardinalities for categorical embeddings
         """
         super().__init__()
         self.input_dim = input_dim
@@ -381,13 +360,8 @@ class EnhancedTFNRegressor(nn.Module):
                 evolution_type=evolution_type,
                 interference_type=interference_type,
                 grid_size=grid_size,
-                num_steps=num_steps,  # <-- PASS IT HERE
-                dropout=dropout,
-                # PASS THE NEW ARGUMENTS DOWN
-                positional_embedding_strategy=positional_embedding_strategy,
-                calendar_features=calendar_features,
-                feature_cardinalities=feature_cardinalities,
-                max_seq_len=max_seq_len
+                num_steps=num_steps,
+                dropout=dropout
             )
             for _ in range(num_layers)
         ])
@@ -478,10 +452,10 @@ class EnhancedTFNRegressor(nn.Module):
     
     def get_physics_constraints(self) -> Dict[str, torch.Tensor]:
         """
-        Get physics constraint losses from all layers.
+        Get stability metrics from all layers.
         
         Returns:
-            Dictionary of constraint losses
+            Dictionary of stability metrics
         """
         constraints = {}
         
