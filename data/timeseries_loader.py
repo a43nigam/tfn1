@@ -246,10 +246,10 @@ class ETTDataset(Dataset):
         test_data = data[n_train+n_val:]
         
         # Apply normalization strategy
-        if normalization_strategy == "instance":
-            # For RevIN, we don't normalize in the data loader
-            # The RevIN wrapper will handle normalization
-            print("ℹ️  Using RevIN wrapper - skipping data normalization in loader")
+        if normalization_strategy == "instance" or normalization_strategy == "parn":
+            # For RevIN/PARN, we don't normalize in the data loader
+            # The model wrapper will handle normalization
+            print(f"ℹ️  Using model wrapper for '{normalization_strategy}' - skipping data normalization in loader")
             normalizer = None
         else:
             # Apply normalization strategy as before
