@@ -139,21 +139,22 @@ MODEL_REGISTRY = {
         'task_type': 'regression',
         'evolution_types': ['diffusion', 'wave', 'schrodinger', 'cnn', 'spatially_varying_pde', 'modernized_cnn'],
         'components': ['field_projection', 'field_interference', 'field_evolution', 'field_sampling'],
-        'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len', 'kernel_type', 'interference_type'],
+        'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len', 'num_layers'],
         'optional_params': [
-            'num_layers', 'evolution_type', 'grid_size', 'num_heads', 'dropout',
-            'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities', 'max_seq_len',
-            'num_steps'
+            'pos_dim', 'kernel_type', 'evolution_type', 'interference_type', 'grid_size', 'num_heads', 'dropout',
+            'num_steps', 'max_seq_len'
         ],
         'defaults': {
             'num_layers': 1,
+            'pos_dim': 1,
             'kernel_type': 'film_learnable',
             'evolution_type': 'diffusion',
             'interference_type': 'causal',
             'grid_size': 100,
             'num_heads': 8,
             'dropout': 0.1,
-            'num_steps': 4
+            'num_steps': 4,
+            'max_seq_len': 512
         }
     },
     
