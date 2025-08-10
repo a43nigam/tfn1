@@ -191,7 +191,7 @@ class Trainer:
                 if v is None:
                     metric_parts.append(f"{k}: None")
                 else:
-                    metric_parts.append(f"{k}: {v:.4f}")
+                    metric_parts.append(f"{k}: {v:.2e}")
         metric_str = " | ".join(metric_parts)
         print(f"Epoch {epoch:02d} | {step.capitalize()} | {metric_str}")
 

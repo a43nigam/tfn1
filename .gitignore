@@ -117,4 +117,7 @@ Desktop.ini
 # Project specific
 search_results/
 test_output/
-test_weight_decay_output/ 
+test_weight_decay_output/
+
+# Large synthetic datasets (generate locally)
+data/synthetic/*.pt 

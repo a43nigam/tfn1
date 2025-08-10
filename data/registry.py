@@ -17,6 +17,7 @@ from data.pg19_loader import PG19Dataset
 from data.wikitext_loader import WikiTextDataset
 from data.pde_loader import PDEDataset, DarcyFlowDataset, load_pde_data
 from data_pipeline import SyntheticCopyDataset
+from data.synthetic_task_loader import SyntheticTaskDataset
 from data.split_utils import get_split_sizes, DEFAULT_SPLIT_FRAC
 import torch
 
@@ -130,6 +131,51 @@ DATASET_REGISTRY = {
         'factory_method': None,  # Direct instantiation
         'split_method': None,    # No splits for synthetic
         'description': 'Synthetic dataset for testing copy and classification tasks'
+    },
+    
+    'heat_equation': {
+        'class': SyntheticTaskDataset,
+        'task_type': 'regression',
+        'required_params': ['file_path'],
+        'optional_params': ['split_ratios', 'seed'],
+        'defaults': {
+            'file_path': 'data/synthetic/heat_equation.pt',
+            'split_ratios': None,
+            'seed': 42
+        },
+        'factory_method': 'get_splits',
+        'split_method': 'get_splits',
+        'description': 'Synthetic 1D heat equation simulation for testing PDE learning and spatial-temporal evolution'
+    },
+
+    'delayed_copy': {
+        'class': SyntheticTaskDataset,
+        'task_type': 'classification',  # Token-based prediction task
+        'required_params': ['file_path'],
+        'optional_params': ['split_ratios', 'seed'],
+        'defaults': {
+            'file_path': 'data/synthetic/delayed_copy.pt',
+            'split_ratios': None,
+            'seed': 42
+        },
+        'factory_method': 'get_splits',
+        'split_method': 'get_splits',
+        'description': 'Synthetic delayed copy task for testing long-range dependencies and memory retention'
+    },
+
+    'irregular_sampling': {
+        'class': SyntheticTaskDataset,
+        'task_type': 'regression',
+        'required_params': ['file_path'],
+        'optional_params': ['split_ratios', 'seed'],
+        'defaults': {
+            'file_path': 'data/synthetic/irregular_sampling.pt',
+            'split_ratios': None,
+            'seed': 42
+        },
+        'factory_method': 'get_splits',
+        'split_method': 'get_splits',
+        'description': 'Synthetic task with irregular timestamps to test continuous position handling and temporal interpolation'
     },
     
     # ============================================================================
