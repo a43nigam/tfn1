@@ -68,22 +68,31 @@ class SyntheticTaskDataset(Dataset):
         if 'initial_conditions' in data_keys and 'solutions' in data_keys:
             # Heat equation dataset
             self.dataset_type = 'heat_equation'
-            self.inputs = self.data['initial_conditions']  # [n_samples, grid_points]
-            self.targets = self.data['solutions']          # [n_samples, seq_len, grid_points]
             
-            # Add feature dimension for compatibility: [batch, seq_len, features]
-            # For heat equation: inputs become [batch, 1, grid_points] (initial condition)
-            # targets become [batch, seq_len, grid_points] (evolution over time)
-            self.inputs = self.inputs.unsqueeze(1)  # Add time dimension
+            # --- FIX: Reshape data for TFN compatibility ---
+            # Original data shapes:
+            # initial_conditions: [n_samples, grid_points]
+            # solutions: [n_samples, seq_len, grid_points]
             
-            # Store grid information if available
-            self.positions = None
+            # 1. Reshape the input to [n_samples, grid_points, 1]
+            # The spatial grid becomes the sequence dimension
+            self.inputs = self.data['initial_conditions'].unsqueeze(-1)  # [n_samples, grid_points, 1]
+
+            # 2. Select a single future timestep as the target
+            # This simplifies the task to a standard sequence-to-sequence problem
+            target_timestep = self.data['solutions'].shape[1] - 1  # Use the last timestep
+            self.targets = self.data['solutions'][:, target_timestep, :].unsqueeze(-1)  # [n_samples, grid_points, 1]
+            
+            # 3. Store the grid to be used as positions
             if 'grid' in self.data:
                 self.grid = self.data['grid']
             else:
-                # Create default grid
-                grid_points = self.inputs.shape[-1]
+                grid_points = self.inputs.shape[1]
                 self.grid = torch.linspace(0, 1, grid_points)
+            
+            # 4. Set positions to None since we'll generate them per-sample in __getitem__
+            self.positions = None
+            # --- FIX ENDS HERE ---
                 
         elif 'inputs' in data_keys and 'targets' in data_keys and 'positions' in data_keys:
             # Irregular sampling dataset
@@ -160,9 +169,13 @@ class SyntheticTaskDataset(Dataset):
         
         # Add dataset-specific metadata
         if self.dataset_type == 'heat_equation':
-            # For heat equation, we might want to include the spatial grid
+            # --- FIX: Ensure positions are included for heat equation ---
+            # For heat equation, the spatial grid serves as the positions
             if hasattr(self, 'grid'):
-                sample['grid'] = self.grid
+                # The grid is the same for all samples, reshape to [grid_points, 1]
+                sample['positions'] = self.grid.unsqueeze(-1)  # Shape: [grid_points, 1]
+                sample['grid'] = self.grid  # Keep grid for reference
+            # --- FIX ENDS HERE ---
                 
         elif self.dataset_type == 'delayed_copy':
             # For delayed copy, add vocab info

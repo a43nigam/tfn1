@@ -46,6 +46,7 @@ print(f'Dataset created: {len(train_ds)} samples')
 - **Physics**: 1D heat diffusion with finite-difference solver
 - **Initial Conditions**: Gaussian bumps, step functions, Fourier series
 - **Format**: `initial_conditions` [1000, 100], `solutions` [1000, 200, 100]
+- **TFN Format**: `inputs` [batch, 100, 1], `targets` [batch, 100, 1], `positions` [batch, 100, 1]
 
 ### Delayed Copy Dataset  
 - **Purpose**: Test long-range memory and dependency tracking
@@ -115,7 +116,7 @@ The loader automatically standardizes different dataset formats:
 
 | Dataset | Input Shape | Target Shape | Additional Keys |
 |---------|-------------|--------------|-----------------|
-| Heat Equation | `[batch, 1, 100]` | `[batch, 200, 100]` | `grid` |
+| Heat Equation | `[batch, 100, 1]` | `[batch, 100, 1]` | `positions`, `grid` |
 | Delayed Copy | `[batch, 10000]` | `[batch, 10000]` | `vocab_size`, `delay` |
 | Irregular Sampling | `[batch, 200, 1]` | `[batch, 200, 1]` | `positions` |
 

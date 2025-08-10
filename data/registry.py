@@ -139,7 +139,6 @@ DATASET_REGISTRY = {
         'required_params': ['file_path'],
         'optional_params': ['split_ratios', 'seed'],
         'defaults': {
-            'file_path': 'data/synthetic/heat_equation.pt',
             'split_ratios': None,
             'seed': 42
         },
@@ -150,11 +149,10 @@ DATASET_REGISTRY = {
 
     'delayed_copy': {
         'class': SyntheticTaskDataset,
-        'task_type': 'classification',  # Token-based prediction task
+        'task_type': 'language_modeling',  # Changed from 'classification' - token-level prediction task
         'required_params': ['file_path'],
         'optional_params': ['split_ratios', 'seed'],
         'defaults': {
-            'file_path': 'data/synthetic/delayed_copy.pt',
             'split_ratios': None,
             'seed': 42
         },
@@ -169,7 +167,6 @@ DATASET_REGISTRY = {
         'required_params': ['file_path'],
         'optional_params': ['split_ratios', 'seed'],
         'defaults': {
-            'file_path': 'data/synthetic/irregular_sampling.pt',
             'split_ratios': None,
             'seed': 42
         },

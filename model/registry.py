@@ -401,7 +401,7 @@ TASK_COMPATIBILITY = {
     'language_modeling': {
         'models': ['tfn_language_model', 'enhanced_tfn_language_model', 'transformer_language_model', 
                   'performer_language_model'],
-        'datasets': ['pg19', 'wikitext', 'long_text']
+        'datasets': ['pg19', 'wikitext', 'long_text', 'delayed_copy']
     },
     'vision': {
         'models': ['tfn_vision'],
