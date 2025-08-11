@@ -48,15 +48,27 @@ class LearnedPositionalEmbeddings(PositionalEmbeddingStrategy):
         nn.init.normal_(self.pos.weight, mean=0.0, std=0.02)
 
     def forward(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:  # [L, D]
-        seq_len = positions.shape[1] if positions.dim() > 1 else positions.shape[0]
-        idx = torch.arange(seq_len, device=positions.device)
-        
-        # Ensure the embedding layer is on the same device as the input tensor
-        # This handles cases where the model is moved to CUDA after initialization
-        if self.pos.weight.device != positions.device:
-            self.pos = self.pos.to(positions.device)
-        
-        return self.pos(idx)
+        # Handle both discrete indices and continuous positions
+        if positions.dtype in [torch.long, torch.int32, torch.int64]:
+            # Discrete indices - use directly
+            if positions.dim() == 2:
+                # [B, N] -> use positions directly
+                return self.pos(positions)
+            else:
+                # [N] -> expand to [1, N]
+                return self.pos(positions.unsqueeze(0))
+        else:
+            # Continuous positions - convert to indices
+            # This is a fallback for when continuous positions are passed to learned embeddings
+            # In practice, use 'continuous' or 'sinusoidal' strategy for continuous positions
+            seq_len = positions.shape[1] if positions.dim() > 1 else positions.shape[0]
+            idx = torch.arange(seq_len, device=positions.device)
+            
+            # Ensure the embedding layer is on the same device as the input tensor
+            if self.pos.weight.device != positions.device:
+                self.pos = self.pos.to(positions.device)
+            
+            return self.pos(idx)
 
     def __call__(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:
         """Make the object callable."""

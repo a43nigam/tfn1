@@ -12,11 +12,12 @@ import torch.nn.functional as F
 from typing import Optional, Tuple, Dict, Any, List
 import math
 
-from core.field_projection import FieldProjector
+from core.field_projection import FieldProjector, LowRankFieldProjector
 from core.field_evolution import FieldEvolver, DynamicFieldPropagator, create_field_evolver
 from core.field_sampling import FieldSampler
 from core.field_interference import TokenFieldInterference, create_field_interference
 from core.unified_field_dynamics import UnifiedFieldDynamics
+from .shared_layers import create_positional_embedding_strategy
 
 
 class EnhancedTFNLayer(nn.Module):
@@ -33,20 +34,67 @@ class EnhancedTFNLayer(nn.Module):
                  evolution_type: str = "diffusion",
                  interference_type: str = "standard",
                  grid_size: int = 100,
+                 # --- NEW PARAMETERS ---
+                 projector_type: str = 'standard', # 'standard' or 'low_rank'
+                 proj_dim: int = 64,             # Dimension for low_rank projector
+                 # --- END NEW ---
                  num_steps: int = 4,
                  dropout: float = 0.1,
                  layer_norm_eps: float = 1e-5,
+                 # --- UNIFIED POSITIONAL EMBEDDING STRATEGY ---
+                 positional_embedding_strategy: Optional[str] = None,
+                 max_seq_len: Optional[int] = None,
+                 calendar_features: Optional[List[str]] = None,
+                 feature_cardinalities: Optional[Dict[str, int]] = None,
+                 is_first_layer: bool = False,
+                 # --- END UNIFIED ---
                  **kwargs):
+        """
+        Initialize enhanced TFN layer.
+        
+        Args:
+            embed_dim: Dimension of embeddings
+            pos_dim: Dimension of position space
+            kernel_type: Type of kernel for field projection
+            evolution_type: Type of evolution for field evolution
+            interference_type: Type of interference mechanism
+            grid_size: Number of grid points for field evaluation
+            projector_type: Type of field projector ('standard' or 'low_rank')
+            proj_dim: Projection dimension for low-rank projector
+            num_steps: Number of evolution steps
+            dropout: Dropout rate
+            layer_norm_eps: Epsilon for layer normalization
+            positional_embedding_strategy: Strategy for positional embeddings
+            max_seq_len: Maximum sequence length for positional embeddings
+            **kwargs: Additional keyword arguments
+        """
         super().__init__()
         self.embed_dim = embed_dim
         self.pos_dim = pos_dim
         self.grid_size = grid_size
-        # Field projection
-        self.field_projector = FieldProjector(
-            embed_dim=embed_dim,
-            pos_dim=pos_dim,
-            kernel_type=kernel_type
-        )
+        self.projector_type = projector_type
+        self.proj_dim = proj_dim
+        self.is_first_layer = is_first_layer
+        
+        # --- MODIFIED SECTION ---
+        # Field projection (now conditional)
+        if projector_type == 'standard':
+            self.field_projector = FieldProjector(
+                embed_dim=embed_dim,
+                pos_dim=pos_dim,
+                kernel_type=kernel_type
+            )
+        elif projector_type == 'low_rank':
+            self.field_projector = LowRankFieldProjector(
+                embed_dim=embed_dim,
+                pos_dim=pos_dim,
+                grid_size=grid_size,
+                kernel_type=kernel_type,
+                proj_dim=proj_dim
+            )
+        else:
+            raise ValueError(f"Unknown projector_type: {projector_type}")
+        # --- END MODIFIED ---
         # Unified field dynamics
         self.unified_dynamics = UnifiedFieldDynamics(
             embed_dim=embed_dim,
@@ -64,18 +112,33 @@ class EnhancedTFNLayer(nn.Module):
         # Output projection
         self.output_proj = nn.Linear(embed_dim, embed_dim)
         self.dropout = nn.Dropout(dropout)
+        # --- UNIFIED POSITIONAL EMBEDDING STRATEGY ---
+        # Only the first layer in a stack should create and add positional embeddings
+        if is_first_layer and positional_embedding_strategy is not None and max_seq_len is not None:
+            self.pos_embedding = create_positional_embedding_strategy(
+                strategy_name=positional_embedding_strategy,
+                max_len=max_seq_len,
+                embed_dim=embed_dim,
+                calendar_features=calendar_features,
+                feature_cardinalities=feature_cardinalities,
+            )
+        else:
+            self.pos_embedding = None
+        # --- END UNIFIED ---
         
     def forward(self, 
-                x: torch.Tensor,  # [B, N, D] position-aware token embeddings
+                x: torch.Tensor,  # [B, N, D] raw token embeddings
                 positions: torch.Tensor,  # [B, N, P] token positions
-                grid_points: Optional[torch.Tensor] = None) -> torch.Tensor:
+                grid_points: Optional[torch.Tensor] = None,
+                calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> torch.Tensor:
         """
         Forward pass through enhanced TFN layer.
         
         Args:
-            x: Position-aware token embeddings [B, N, D]
+            x: Raw token embeddings [B, N, D] (positional embeddings added by first layer)
             positions: Token positions [B, N, P]
             grid_points: Optional grid points for field projection
+            calendar_features: Optional calendar features for time-based positional embeddings
             
         Returns:
             Enhanced embeddings [B, N, D]
@@ -84,8 +147,12 @@ class EnhancedTFNLayer(nn.Module):
         if grid_points is None:
             grid_points = self._generate_grid_points(batch_size)
 
-        # The input 'x' is now used directly - no new positional embeddings are added
-        # as the input is already position-aware from the main model
+        # --- UNIFIED POSITIONAL EMBEDDING LOGIC ---
+        # If this is the first layer, add positional embeddings
+        if self.is_first_layer and self.pos_embedding is not None:
+            pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
+            x = x + pos_emb
+        # --- END UNIFIED ---
 
         # Step 1: Field Projection
         field = self.field_projector(x, positions, grid_points)  # [B, M, D]
@@ -94,7 +161,7 @@ class EnhancedTFNLayer(nn.Module):
         # Step 3: Field Sampling
         enhanced_embeddings = self.field_sampler(field_evolved, grid_points, positions)  # [B, N, D]
         
-        # Correct residual connection: add the original position-aware input 'x'
+        # Correct residual connection: add the input (with positional embeddings if first layer)
         residual = x
         enhanced_embeddings = self.layer_norm1(enhanced_embeddings + residual)
         
@@ -136,6 +203,10 @@ class EnhancedTFNModel(nn.Module):
                  evolution_type: str = "diffusion",
                  interference_type: str = "standard",
                  grid_size: int = 100,
+                 # --- ADD NEW PARAMS ---
+                 projector_type: str = 'standard',
+                 proj_dim: int = 64,
+                 # --- END NEW ---
                  num_heads: int = 8,
                  dropout: float = 0.1,
                  *,
@@ -152,6 +223,8 @@ class EnhancedTFNModel(nn.Module):
             evolution_type: Type of evolution for field evolution
             interference_type: Type of interference
             grid_size: Number of grid points
+            projector_type: Type of field projector ('standard' or 'low_rank')
+            proj_dim: Projection dimension for low-rank projector
             num_heads: Number of attention heads
             dropout: Dropout rate
             max_seq_len: Maximum sequence length
@@ -177,6 +250,10 @@ class EnhancedTFNModel(nn.Module):
                 evolution_type=evolution_type,
                 interference_type=interference_type,
                 grid_size=grid_size,
+                # --- PASS NEW PARAMS ---
+                projector_type=projector_type,
+                proj_dim=proj_dim,
+                # --- END PASS ---
                 num_steps=4,  # Default for UnifiedFieldDynamics
                 dropout=dropout
             )
@@ -271,6 +348,8 @@ def create_enhanced_tfn_model(vocab_size: int,
                              embed_dim: int,
                              num_layers: int,
                              interference_type: str = "standard",
+                             projector_type: str = "standard",
+                             proj_dim: int = 64,
                              **kwargs) -> EnhancedTFNModel:
     """
     Factory function to create enhanced TFN models.
@@ -280,6 +359,8 @@ def create_enhanced_tfn_model(vocab_size: int,
         embed_dim: Dimension of embeddings
         num_layers: Number of TFN layers
         interference_type: Type of interference mechanism
+        projector_type: Type of field projector ('standard' or 'low_rank')
+        proj_dim: Projection dimension for low-rank projector
         **kwargs: Additional arguments
         
     Returns:
@@ -290,6 +371,8 @@ def create_enhanced_tfn_model(vocab_size: int,
         embed_dim=embed_dim,
         num_layers=num_layers,
         interference_type=interference_type,
+        projector_type=projector_type,
+        proj_dim=proj_dim,
         **kwargs
     )
 
@@ -313,6 +396,11 @@ class EnhancedTFNRegressor(nn.Module):
                  evolution_type: str = "diffusion",
                  interference_type: str = "standard",
                  grid_size: int = 100,
+                 # --- ADD THE NEW PARAMETERS TO THE SIGNATURE ---
+                 projector_type: str = 'standard',
+                 proj_dim: int = 64,
+                 positional_embedding_strategy: str = "continuous",
+                 # ---
                  num_heads: int = 8,
                  dropout: float = 0.1,
                  num_steps: int = 4,
@@ -332,6 +420,9 @@ class EnhancedTFNRegressor(nn.Module):
             evolution_type: Type of evolution for field evolution
             interference_type: Type of interference
             grid_size: Number of grid points
+            projector_type: Type of field projector ('standard' or 'low_rank')
+            proj_dim: Projection dimension for low-rank projector
+            positional_embedding_strategy: Strategy for positional embeddings
             num_heads: Number of attention heads
             dropout: Dropout rate
             num_steps: Number of evolution steps
@@ -348,10 +439,7 @@ class EnhancedTFNRegressor(nn.Module):
         # Input projection (for continuous features)
         self.input_proj = nn.Linear(input_dim, embed_dim)
         
-        # Position embedding
-        self.pos_embedding = nn.Embedding(max_seq_len, embed_dim)
-        
-        # Enhanced TFN layers
+        # Enhanced TFN layers - pass positional embedding strategy to each layer
         self.layers = nn.ModuleList([
             EnhancedTFNLayer(
                 embed_dim=embed_dim,
@@ -360,10 +448,21 @@ class EnhancedTFNRegressor(nn.Module):
                 evolution_type=evolution_type,
                 interference_type=interference_type,
                 grid_size=grid_size,
+                # --- PASS NEW PARAMS ---
+                projector_type=projector_type,
+                proj_dim=proj_dim,
+                # --- END PASS ---
                 num_steps=num_steps,
-                dropout=dropout
+                dropout=dropout,
+                # --- UNIFIED POSITIONAL EMBEDDING STRATEGY ---
+                positional_embedding_strategy=positional_embedding_strategy if i == 0 else None,
+                max_seq_len=max_seq_len if i == 0 else None,
+                calendar_features=None,  # TODO: Add support for calendar features
+                feature_cardinalities=None,  # TODO: Add support for feature cardinalities
+                is_first_layer=(i == 0)
+                # --- END UNIFIED ---
             )
-            for _ in range(num_layers)
+            for i in range(num_layers)
         ])
         
         # Output projection for regression
@@ -386,8 +485,8 @@ class EnhancedTFNRegressor(nn.Module):
         nn.init.normal_(self.input_proj.weight, 0, 0.02)
         nn.init.zeros_(self.input_proj.bias)
         
-        # Position embedding initialization
-        nn.init.normal_(self.pos_embedding.weight, 0, 0.02)
+        # Position embedding initialization is now handled by the layers
+        # No need to initialize pos_embedding weights in the main model
         
         # Output projection initialization
         for layer in self.output_proj:
@@ -397,13 +496,15 @@ class EnhancedTFNRegressor(nn.Module):
         
     def forward(self, 
                 inputs: torch.Tensor,  # [B, N, input_dim] continuous features
-                positions: Optional[torch.Tensor] = None) -> torch.Tensor:
+                positions: Optional[torch.Tensor] = None,
+                calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> torch.Tensor:
         """
         Forward pass through enhanced TFN regressor.
         
         Args:
             inputs: Input continuous features [B, N, input_dim]
-            positions: Token positions [B, N, P] (optional)
+            positions: Token positions [B, N, P] (optional, positional embeddings added by first layer)
+            calendar_features: Optional calendar features for time-based positional embeddings
             
         Returns:
             Regression outputs [B, output_len, output_dim]
@@ -421,13 +522,8 @@ class EnhancedTFNRegressor(nn.Module):
             positions = positions.unsqueeze(0).expand(batch_size, -1)  # [B, N]
             positions = positions.unsqueeze(-1)  # [B, N, 1]
         
-        # Position embeddings for residual connection
-        pos_indices = torch.arange(seq_len, device=inputs.device).unsqueeze(0)
-        pos_embeddings = self.pos_embedding(pos_indices)  # [1, N, embed_dim]
-        pos_embeddings = pos_embeddings.expand(batch_size, -1, -1)  # [B, N, embed_dim]
-        
-        # Combine input and position embeddings
-        x = embeddings + pos_embeddings
+        # Pass embeddings directly to layers - positional embeddings are added by each layer
+        x = embeddings
         
         # Pass through enhanced TFN layers
         for layer in self.layers:

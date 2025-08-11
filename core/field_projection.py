@@ -9,8 +9,8 @@ import torch
 import torch.nn as nn
 from typing import Tuple, Optional, Union
 from .kernels import (KernelBasis, RBFKernel, CompactKernel, FourierKernel,
-                     DataDependentRBFKernel, DataDependentCompactKernel, 
-                     FiLMLearnableKernel)
+                     MultiFrequencyFourierKernel, DataDependentRBFKernel, 
+                     DataDependentCompactKernel, FiLMLearnableKernel)
 
 
 class FieldProjector(nn.Module):
@@ -61,8 +61,8 @@ class FieldProjector(nn.Module):
             self.kernel = CompactKernel(pos_dim=pos_dim, **default_kernel_params)
         elif kernel_type == "fourier":
             self.kernel = FourierKernel(pos_dim=pos_dim, **default_kernel_params)
-        elif kernel_type == "learnable":
-            self.kernel = LearnableKernel(pos_dim=pos_dim, **default_kernel_params)
+        elif kernel_type == "multi_frequency_fourier":
+            self.kernel = MultiFrequencyFourierKernel(pos_dim=pos_dim, **default_kernel_params)
         elif kernel_type == "data_dependent_rbf":
             self.kernel = DataDependentRBFKernel(pos_dim=pos_dim, embed_dim=embed_dim, **default_kernel_params)
         elif kernel_type == "data_dependent_compact":
@@ -258,3 +258,241 @@ class UniformFieldGrid(nn.Module):
     def num_points(self) -> int:
         """Get number of grid points."""
         return self.grid_points.shape[0] 
+
+
+class LowRankFieldProjector(nn.Module):
+    """
+    Projects tokens into fields using a low-rank approximation to avoid creating
+    the full [B, N, D, M] intermediate tensor, saving memory and computation.
+    
+    This class implements a memory-efficient alternative to the standard FieldProjector
+    by projecting both embeddings and kernel values into a shared low-rank space
+    before computing their interaction. This avoids the memory-intensive outer product
+    operation while maintaining the core field projection functionality.
+    
+    Mathematical formulation:
+        F(z) = U(Σᵢ P(Eᵢ) ⊙ P(Kᵢ(z, μᵢ, θᵢ)))
+    
+    Where:
+        - Eᵢ = embedding of token i
+        - Kᵢ = kernel of token i
+        - P(·) = projection to low-rank space
+        - ⊙ = element-wise product
+        - U(·) = upsampling from low-rank space
+        - F(z) = continuous field at position z
+    """
+    
+    def __init__(self,
+                 embed_dim: int,
+                 pos_dim: int,
+                 grid_size: int,  # Needed for the kernel projection layer
+                 kernel_type: str = "rbf",
+                 proj_dim: int = 64,  # The dimension of the low-rank space
+                 default_kernel_params: Optional[dict] = None):
+        """
+        Initialize low-rank field projector.
+        
+        Args:
+            embed_dim: Dimension of token embeddings
+            pos_dim: Dimension of position space
+            grid_size: Size of the spatial grid (number of grid points)
+            kernel_type: Type of kernel to use ("rbf", "compact", "fourier", "multi_frequency_fourier", "data_dependent_rbf", "data_dependent_compact", "film_learnable")
+            proj_dim: Dimension of the low-rank projection space
+            default_kernel_params: Default parameters for kernel initialization
+        """
+        super().__init__()
+        
+        self.embed_dim = embed_dim
+        self.pos_dim = pos_dim
+        self.grid_size = grid_size
+        self.proj_dim = proj_dim
+        self.kernel_type = kernel_type
+        
+        # Initialize kernel using the same logic as FieldProjector
+        if default_kernel_params is None:
+            default_kernel_params = {}
+        
+        if kernel_type == "rbf":
+            self.kernel = RBFKernel(pos_dim=pos_dim, **default_kernel_params)
+        elif kernel_type == "compact":
+            self.kernel = CompactKernel(pos_dim=pos_dim, **default_kernel_params)
+        elif kernel_type == "fourier":
+            self.kernel = FourierKernel(pos_dim=pos_dim, **default_kernel_params)
+        elif kernel_type == "multi_frequency_fourier":
+            self.kernel = MultiFrequencyFourierKernel(pos_dim=pos_dim, **default_kernel_params)
+        elif kernel_type == "data_dependent_rbf":
+            self.kernel = DataDependentRBFKernel(pos_dim=pos_dim, embed_dim=embed_dim, **default_kernel_params)
+        elif kernel_type == "data_dependent_compact":
+            self.kernel = DataDependentCompactKernel(pos_dim=pos_dim, embed_dim=embed_dim, **default_kernel_params)
+        elif kernel_type == "film_learnable":
+            self.kernel = FiLMLearnableKernel(pos_dim=pos_dim, embed_dim=embed_dim, **default_kernel_params)
+        else:
+            # Default to RBF kernel for unknown types
+            self.kernel = RBFKernel(pos_dim=pos_dim, **default_kernel_params)
+        
+        # --- New Projection Layers ---
+        self.embedding_projector = nn.Linear(embed_dim, proj_dim)
+        self.kernel_projector = nn.Linear(grid_size, proj_dim)
+        self.field_upsampler = nn.Linear(proj_dim, embed_dim)
+        
+        # Initialize projection layers with appropriate scaling
+        nn.init.xavier_uniform_(self.embedding_projector.weight)
+        nn.init.xavier_uniform_(self.kernel_projector.weight)
+        nn.init.xavier_uniform_(self.field_upsampler.weight)
+        nn.init.zeros_(self.embedding_projector.bias)
+        nn.init.zeros_(self.kernel_projector.bias)
+        nn.init.zeros_(self.field_upsampler.bias)
+    
+    def forward(self,
+                embeddings: torch.Tensor,      # [B, N, D]
+                positions: torch.Tensor,       # [B, N, P]
+                grid_points: torch.Tensor,     # [B, M, P]
+                kernel_params: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Project token embeddings into continuous fields using low-rank approximation.
+        
+        Args:
+            embeddings: Token embeddings of shape [B, N, D]
+            positions: Token positions of shape [B, N, P]
+            grid_points: Grid points for field evaluation of shape [B, M, P]
+            kernel_params: Kernel parameters of shape [B, N, K] (optional)
+            
+        Returns:
+            Continuous field of shape [B, M, D]
+        """
+        batch_size, num_tokens, embed_dim = embeddings.shape
+        num_grid_points = grid_points.shape[1]
+        
+        # Ensure grid_points has batch dimension
+        if grid_points.dim() == 2:
+            grid_points = grid_points.unsqueeze(0).expand(batch_size, -1, -1)  # [M, P] -> [B, M, P]
+        
+        # 1. Compute kernel values, same as before
+        # kernel_values shape: [B, N, M] where M is grid_size
+        if self.kernel_type in ["data_dependent_rbf", "data_dependent_compact", "film_learnable"]:
+            kernel_values = self.kernel(grid_points, positions, embeddings)  # [B, N, M]
+        else:
+            # Standard kernels
+            if kernel_params is None:
+                # Use default parameters (e.g., sigma=0.2 for RBF)
+                if self.kernel_type == "rbf":
+                    kernel_params = torch.full((batch_size, num_tokens, 1), 0.2,
+                                            device=embeddings.device, dtype=embeddings.dtype)
+                else:
+                    # Default parameters for other kernels
+                    kernel_params = torch.full((batch_size, num_tokens, 1), 0.2,
+                                            device=embeddings.device, dtype=embeddings.dtype)
+            
+            kernel_values = self.kernel(grid_points, positions, kernel_params)  # [B, N, M]
+        
+        # 2. Project embeddings and kernel values to the low-rank space
+        #    [B, N, D] -> [B, N, d_proj]
+        projected_embeddings = self.embedding_projector(embeddings)
+        #    [B, N, M] -> [B, N, d_proj]
+        projected_kernels = self.kernel_projector(kernel_values)
+        
+        # 3. Combine in the latent space
+        #    Element-wise product is a simple and effective choice
+        latent_interaction = projected_embeddings * projected_kernels  # [B, N, d_proj]
+        
+        # 4. Aggregate over the sequence dimension to form the latent field
+        #    [B, N, d_proj] -> [B, d_proj]
+        latent_field = torch.sum(latent_interaction, dim=1)
+        
+        # 5. Project the latent field back up to the full embedding dimension
+        #    [B, d_proj] -> [B, D]
+        aggregated_field_vectors = self.field_upsampler(latent_field)
+        
+        # 6. Expand to the grid size to create the final field
+        #    [B, D] -> [B, 1, D] -> [B, M, D]
+        final_field = aggregated_field_vectors.unsqueeze(1).expand(-1, num_grid_points, -1)
+        
+        return final_field
+    
+    def compute_token_influence(self,
+                              embeddings: torch.Tensor,      # [B, N, D]
+                              positions: torch.Tensor,       # [B, N, P]
+                              grid_points: torch.Tensor,     # [B, M, P]
+                              kernel_params: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Compute individual token influence on the field using low-rank approximation.
+        
+        This method provides a memory-efficient way to analyze individual token
+        contributions while avoiding the full [B, N, M, D] tensor.
+        
+        Args:
+            embeddings: Token embeddings of shape [B, N, D]
+            positions: Token positions of shape [B, N, P]
+            grid_points: Grid points for field evaluation
+            kernel_params: Kernel parameters (optional)
+            
+        Returns:
+            Individual token influences of shape [B, N, M, D]
+        """
+        batch_size, num_tokens, embed_dim = embeddings.shape
+        num_grid_points = grid_points.shape[1] if grid_points.dim() == 3 else grid_points.shape[0]
+        
+        # Ensure grid_points has batch dimension
+        if grid_points.dim() == 2:
+            grid_points = grid_points.unsqueeze(0).expand(batch_size, -1, -1)
+        
+        # Compute kernel values
+        if self.kernel_type in ["data_dependent_rbf", "data_dependent_compact", "film_learnable"]:
+            kernel_values = self.kernel(grid_points, positions, embeddings)  # [B, N, M]
+        else:
+            if kernel_params is None:
+                if self.kernel_type == "rbf":
+                    kernel_params = torch.full((batch_size, num_tokens, 1), 0.2,
+                                            device=embeddings.device, dtype=embeddings.dtype)
+                else:
+                    kernel_params = torch.full((batch_size, num_tokens, 1), 0.2,
+                                            device=embeddings.device, dtype=embeddings.dtype)
+            
+            kernel_values = self.kernel(grid_points, positions, kernel_params)  # [B, N, M]
+        
+        # Project to low-rank space
+        projected_embeddings = self.embedding_projector(embeddings)  # [B, N, d_proj]
+        projected_kernels = self.kernel_projector(kernel_values)     # [B, N, d_proj]
+        
+        # Compute individual token influences in low-rank space
+        latent_influences = projected_embeddings * projected_kernels  # [B, N, d_proj]
+        
+        # Project back to full dimension for each token
+        token_influences = self.field_upsampler(latent_influences)  # [B, N, D]
+        
+        # Expand to grid size: [B, N, D] -> [B, N, 1, D] -> [B, N, M, D]
+        token_influences = token_influences.unsqueeze(2).expand(-1, -1, num_grid_points, -1)
+        
+        return token_influences
+    
+    def get_memory_savings(self, batch_size: int, num_tokens: int, grid_size: int) -> dict:
+        """
+        Calculate memory savings compared to the standard FieldProjector.
+        
+        Args:
+            batch_size: Batch size
+            num_tokens: Number of tokens per sequence
+            grid_size: Number of grid points
+            
+        Returns:
+            Dictionary containing memory usage information
+        """
+        # Standard FieldProjector memory usage
+        standard_memory = batch_size * num_tokens * self.embed_dim * grid_size
+        
+        # LowRankFieldProjector memory usage
+        # Intermediate tensors: [B, N, d_proj] + [B, N, d_proj] + [B, d_proj] + [B, D]
+        low_rank_memory = (batch_size * num_tokens * self.proj_dim * 2 + 
+                          batch_size * self.proj_dim + 
+                          batch_size * self.embed_dim)
+        
+        memory_savings = standard_memory - low_rank_memory
+        savings_ratio = memory_savings / standard_memory if standard_memory > 0 else 0
+        
+        return {
+            'standard_memory': standard_memory,
+            'low_rank_memory': low_rank_memory,
+            'memory_savings': memory_savings,
+            'savings_ratio': savings_ratio,
+            'compression_factor': standard_memory / low_rank_memory if low_rank_memory > 0 else float('inf')
+        } 

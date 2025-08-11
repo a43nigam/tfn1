@@ -1,4 +1,4 @@
-__all__ = ["SyntheticCopyDataset", "pad_collate", "get_dataloader"]
+__all__ = ["SyntheticCopyDataset", "pad_collate", "language_modeling_collate", "synthetic_seq_collate", "get_dataloader"]
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -24,6 +24,21 @@ def language_modeling_collate(batch: List[Dict[str, torch.Tensor]]) -> Dict[str,
     return {
         'inputs': inputs,
         'attention_mask': attention_mask,
+        'labels': labels,
+    }
+
+
+def synthetic_seq_collate(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+    """
+    Collate function for synthetic sequence datasets (e.g., Delayed Copy)
+    that do not have an attention mask.
+    """
+    inputs = torch.stack([item['inputs'] for item in batch])
+    # The synthetic loader provides 'targets', which the trainer maps to the 'y' variable (labels)
+    labels = torch.stack([item['targets'] for item in batch])
+    
+    return {
+        'inputs': inputs,
         'labels': labels,
     }
 
@@ -232,6 +247,8 @@ def get_dataloader(config: Dict[str, Any], split: str = 'train') -> DataLoader:
         task = "regression"
     elif dataset_name in ["glue", "arxiv", "imdb"]:
         task = "classification"
+    elif dataset_name in ["pg19", "wikitext", "delayed_copy"]:
+        task = "language_modeling"
     elif dataset_name == "synthetic":
         task = data_cfg.get("task", "copy")
     
@@ -239,9 +256,14 @@ def get_dataloader(config: Dict[str, Any], split: str = 'train') -> DataLoader:
     batch_size = config.get("training", {}).get("batch_size", 32)
     
     # Use appropriate collation function
-    if task == "classification":
+    if dataset_name == "delayed_copy":  # Special handling for this synthetic task
+        collate_fn = synthetic_seq_collate
+    elif task == "classification":
         # For classification, we need special handling
         collate_fn = lambda batch: pad_collate(batch, task="classification")
+    elif task == "language_modeling":
+        # For other LM tasks like PG19 that use tokenizers
+        collate_fn = language_modeling_collate
     else:
         # For regression/copy tasks
         collate_fn = lambda batch: pad_collate(batch, task=task)

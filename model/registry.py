@@ -142,7 +142,9 @@ MODEL_REGISTRY = {
         'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len', 'num_layers'],
         'optional_params': [
             'pos_dim', 'kernel_type', 'evolution_type', 'interference_type', 'grid_size', 'num_heads', 'dropout',
-            'num_steps', 'max_seq_len'
+            'num_steps', 'max_seq_len',
+            # --- ADD NEW PARAMS HERE ---
+            'projector_type', 'proj_dim', 'positional_embedding_strategy'
         ],
         'defaults': {
             'num_layers': 1,
@@ -154,7 +156,10 @@ MODEL_REGISTRY = {
             'num_heads': 8,
             'dropout': 0.1,
             'num_steps': 4,
-            'max_seq_len': 512
+            'max_seq_len': 512,
+            'projector_type': 'standard',
+            'proj_dim': 64,
+            'positional_embedding_strategy': 'continuous'
         }
     },
     
@@ -166,7 +171,8 @@ MODEL_REGISTRY = {
         'required_params': ['vocab_size', 'embed_dim', 'num_layers', 'kernel_type', 'interference_type'],
         'optional_params': [
             'pos_dim', 'evolution_type', 'grid_size', 'num_heads', 'dropout', 'max_seq_len',
-            'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities'
+            'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities',
+            'projector_type', 'proj_dim'
         ],
         'defaults': {
             'pos_dim': 1,
@@ -176,7 +182,9 @@ MODEL_REGISTRY = {
             'grid_size': 100,
             'num_heads': 8,
             'dropout': 0.1,
-            'max_seq_len': 512
+            'max_seq_len': 512,
+            'projector_type': 'standard',
+            'proj_dim': 64
         }
     },
     
