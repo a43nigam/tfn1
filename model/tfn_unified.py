@@ -121,6 +121,16 @@ class TFN(BaseSequenceModel):
                 raise ValueError("input_dim must be provided for regression task")
             self.input_proj = nn.Linear(input_dim, embed_dim)
 
+        # --- ADDED: Positional embedding strategy in parent model ---
+        self.pos_embedding = create_positional_embedding_strategy(
+            strategy_name=positional_embedding_strategy,
+            max_len=output_len,  # Use output_len as max_seq_len
+            embed_dim=embed_dim,
+            calendar_features=calendar_features,
+            feature_cardinalities=feature_cardinalities,
+        )
+        # --- END ADDED ---
+
         # ------------------------------------------------------------------
         # TFN Layers using modern core components
         # ------------------------------------------------------------------
@@ -137,10 +147,9 @@ class TFN(BaseSequenceModel):
                 grid_size=grid_size,
                 num_steps=time_steps,
                 dropout=dropout,
-                positional_embedding_strategy=positional_embedding_strategy,
-                calendar_features=calendar_features,
-                feature_cardinalities=feature_cardinalities,
-                max_seq_len=output_len,
+                # --- REMOVED: No more positional embedding parameters ---
+                # Positional embeddings are now handled by the parent model
+                # --- END REMOVED ---
             )
             self.tfn_layers.append(layer)
 
@@ -207,10 +216,15 @@ class TFN(BaseSequenceModel):
         # ------------------------------------------------------------------
         # TFN Layers
         # ------------------------------------------------------------------
-        x = embeddings
+        # --- FIXED: Add positional embeddings in parent model ---
+        # Create positional embeddings and add them to token embeddings
+        pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
+        x = embeddings + pos_emb  # Combine them ONCE here
+        # --- END FIXED ---
+        
         for layer in self.tfn_layers:
             # EnhancedTFNLayer uses modern core components
-            x = layer(x, positions)
+            x = layer(x, positions)  # The layer now uses x as is, without adding more pos_emb
 
         # ------------------------------------------------------------------
         # Task-Specific Head

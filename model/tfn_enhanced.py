@@ -36,18 +36,14 @@ class EnhancedTFNLayer(nn.Module):
                  grid_size: int = 100,
                  # --- NEW PARAMETERS ---
                  projector_type: str = 'standard', # 'standard' or 'low_rank'
-                 proj_dim: int = 64,             # Dimension for low_rank projector
+                 proj_dim: int = 64,             # Dimension for low-rank projector
                  # --- END NEW ---
                  num_steps: int = 4,
                  dropout: float = 0.1,
                  layer_norm_eps: float = 1e-5,
-                 # --- UNIFIED POSITIONAL EMBEDDING STRATEGY ---
-                 positional_embedding_strategy: Optional[str] = None,
-                 max_seq_len: Optional[int] = None,
-                 calendar_features: Optional[List[str]] = None,
-                 feature_cardinalities: Optional[Dict[str, int]] = None,
-                 is_first_layer: bool = False,
-                 # --- END UNIFIED ---
+                 # --- REMOVED POSITIONAL EMBEDDING STRATEGY ---
+                 # Positional embeddings are now handled by the parent model
+                 # --- END REMOVED ---
                  **kwargs):
         """
         Initialize enhanced TFN layer.
@@ -64,8 +60,6 @@ class EnhancedTFNLayer(nn.Module):
             num_steps: Number of evolution steps
             dropout: Dropout rate
             layer_norm_eps: Epsilon for layer normalization
-            positional_embedding_strategy: Strategy for positional embeddings
-            max_seq_len: Maximum sequence length for positional embeddings
             **kwargs: Additional keyword arguments
         """
         super().__init__()
@@ -74,7 +68,6 @@ class EnhancedTFNLayer(nn.Module):
         self.grid_size = grid_size
         self.projector_type = projector_type
         self.proj_dim = proj_dim
-        self.is_first_layer = is_first_layer
         
         # --- MODIFIED SECTION ---
         # Field projection (now conditional)
@@ -111,22 +104,13 @@ class EnhancedTFNLayer(nn.Module):
         # Output projection
         self.output_proj = nn.Linear(embed_dim, embed_dim)
         self.dropout = nn.Dropout(dropout)
-        # --- UNIFIED POSITIONAL EMBEDDING STRATEGY ---
-        # Only the first layer in a stack should create and add positional embeddings
-        if is_first_layer and positional_embedding_strategy is not None and max_seq_len is not None:
-            self.pos_embedding = create_positional_embedding_strategy(
-                strategy_name=positional_embedding_strategy,
-                max_len=max_seq_len,
-                embed_dim=embed_dim,
-                calendar_features=calendar_features,
-                feature_cardinalities=feature_cardinalities,
-            )
-        else:
-            self.pos_embedding = None
-        # --- END UNIFIED ---
+        # --- REMOVED POSITIONAL EMBEDDING LOGIC ---
+        # Positional embeddings are now handled by the parent model
+        # This layer expects position-aware inputs
+        # --- END REMOVED ---
         
     def forward(self, 
-                x: torch.Tensor,  # [B, N, D] raw token embeddings
+                x: torch.Tensor,  # [B, N, D] position-aware token embeddings
                 positions: torch.Tensor,  # [B, N, P] token positions
                 grid_points: Optional[torch.Tensor] = None,
                 calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> torch.Tensor:
@@ -134,10 +118,10 @@ class EnhancedTFNLayer(nn.Module):
         Forward pass through enhanced TFN layer.
         
         Args:
-            x: Raw token embeddings [B, N, D] (positional embeddings added by first layer)
+            x: Position-aware token embeddings [B, N, D] (positional embeddings already added by parent model)
             positions: Token positions [B, N, P]
             grid_points: Optional grid points for field projection
-            calendar_features: Optional calendar features for time-based positional embeddings
+            calendar_features: Optional calendar features (not used in this layer)
             
         Returns:
             Enhanced embeddings [B, N, D]
@@ -146,12 +130,10 @@ class EnhancedTFNLayer(nn.Module):
         if grid_points is None:
             grid_points = self._generate_grid_points(batch_size)
 
-        # --- UNIFIED POSITIONAL EMBEDDING LOGIC ---
-        # If this is the first layer, add positional embeddings
-        if self.is_first_layer and self.pos_embedding is not None:
-            pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
-            x = x + pos_emb
-        # --- END UNIFIED ---
+        # --- REMOVED POSITIONAL EMBEDDING LOGIC ---
+        # Positional embeddings are now handled by the parent model
+        # This layer expects position-aware inputs
+        # --- END REMOVED ---
 
         # Step 1: Field Projection
         field = self.field_projector(x, positions, grid_points)  # [B, M, D]
@@ -160,7 +142,7 @@ class EnhancedTFNLayer(nn.Module):
         # Step 3: Field Sampling
         enhanced_embeddings = self.field_sampler(field_evolved, grid_points, positions)  # [B, N, D]
         
-        # Correct residual connection: add the input (with positional embeddings if first layer)
+        # Correct residual connection: add the input (which is already position-aware)
         residual = x
         enhanced_embeddings = self.layer_norm1(enhanced_embeddings + residual)
         
@@ -208,6 +190,10 @@ class EnhancedTFNModel(nn.Module):
                  # --- END NEW ---
                  num_heads: int = 8,
                  dropout: float = 0.1,
+                 # --- ADD CALENDAR FEATURES SUPPORT ---
+                 calendar_features: Optional[List[str]] = None,
+                 feature_cardinalities: Optional[Dict[str, int]] = None,
+                 # --- END CALENDAR FEATURES ---
                  *,
                  max_seq_len: int = 512):
         """
@@ -226,6 +212,8 @@ class EnhancedTFNModel(nn.Module):
             proj_dim: Projection dimension for low-rank projector
             num_heads: Number of attention heads
             dropout: Dropout rate
+            calendar_features: Calendar features for time-based positional embeddings
+            feature_cardinalities: Cardinality of each calendar feature
             max_seq_len: Maximum sequence length
         """
         super().__init__()
@@ -237,8 +225,17 @@ class EnhancedTFNModel(nn.Module):
         # Token embedding
         self.token_embedding = nn.Embedding(vocab_size, embed_dim)
         
-        # Position embedding
-        self.pos_embedding = nn.Embedding(max_seq_len, embed_dim)
+        # --- FIXED: Use factory pattern for positional embeddings ---
+        # Default to learned strategy for language modeling
+        positional_embedding_strategy = "learned"
+        self.pos_embedding = create_positional_embedding_strategy(
+            strategy_name=positional_embedding_strategy,
+            max_len=max_seq_len,
+            embed_dim=embed_dim,
+            calendar_features=calendar_features,
+            feature_cardinalities=feature_cardinalities,
+        )
+        # --- END FIXED ---
         
         # Enhanced TFN layers
         self.layers = nn.ModuleList([
@@ -273,8 +270,14 @@ class EnhancedTFNModel(nn.Module):
         # Token embedding initialization
         nn.init.normal_(self.token_embedding.weight, 0, 0.02)
         
-        # Position embedding initialization
-        nn.init.normal_(self.pos_embedding.weight, 0, 0.02)
+        # Position embedding initialization - handle factory pattern
+        if hasattr(self.pos_embedding, 'weight'):
+            # Direct embedding (legacy case)
+            nn.init.normal_(self.pos_embedding.weight, 0, 0.02)
+        elif hasattr(self.pos_embedding, 'pos') and hasattr(self.pos_embedding.pos, 'weight'):
+            # Factory pattern with learned strategy
+            nn.init.normal_(self.pos_embedding.pos.weight, 0, 0.02)
+        # Other strategies (continuous, sinusoidal) don't have weights to initialize
         
         # Output projection initialization
         nn.init.normal_(self.output_proj.weight, 0, 0.02)
@@ -308,7 +311,7 @@ class EnhancedTFNModel(nn.Module):
         
         # Position embeddings for residual connection
         pos_indices = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
-        pos_embeddings = self.pos_embedding(pos_indices)  # [1, N, D]
+        pos_embeddings = self.pos_embedding(pos_indices)  # Use factory pattern
         pos_embeddings = pos_embeddings.expand(batch_size, -1, -1)  # [B, N, D]
         
         # Combine token and position embeddings
@@ -399,6 +402,9 @@ class EnhancedTFNRegressor(nn.Module):
                  projector_type: str = 'standard',
                  proj_dim: int = 64,
                  positional_embedding_strategy: str = "continuous",
+                 # --- ADD CALENDAR FEATURES SUPPORT ---
+                 calendar_features: Optional[List[str]] = None,
+                 feature_cardinalities: Optional[Dict[str, int]] = None,
                  # ---
                  num_heads: int = 8,
                  dropout: float = 0.1,
@@ -422,6 +428,8 @@ class EnhancedTFNRegressor(nn.Module):
             projector_type: Type of field projector ('standard' or 'low_rank')
             proj_dim: Projection dimension for low-rank projector
             positional_embedding_strategy: Strategy for positional embeddings
+            calendar_features: Calendar features for time-based positional embeddings
+            feature_cardinalities: Cardinality of each calendar feature
             num_heads: Number of attention heads
             dropout: Dropout rate
             num_steps: Number of evolution steps
@@ -438,7 +446,17 @@ class EnhancedTFNRegressor(nn.Module):
         # Input projection (for continuous features)
         self.input_proj = nn.Linear(input_dim, embed_dim)
         
-        # Enhanced TFN layers - pass positional embedding strategy to each layer
+        # --- ADDED: Positional embedding strategy in parent model ---
+        self.pos_embedding = create_positional_embedding_strategy(
+            strategy_name=positional_embedding_strategy,
+            max_len=max_seq_len,
+            embed_dim=embed_dim,
+            calendar_features=calendar_features,  # Now supported
+            feature_cardinalities=feature_cardinalities,  # Now supported
+        )
+        # --- END ADDED ---
+        
+        # Enhanced TFN layers - now pure processing blocks
         self.layers = nn.ModuleList([
             EnhancedTFNLayer(
                 embed_dim=embed_dim,
@@ -453,13 +471,8 @@ class EnhancedTFNRegressor(nn.Module):
                 # --- END PASS ---
                 num_steps=num_steps,
                 dropout=dropout,
-                # --- UNIFIED POSITIONAL EMBEDDING STRATEGY ---
-                positional_embedding_strategy=positional_embedding_strategy if i == 0 else None,
-                max_seq_len=max_seq_len if i == 0 else None,
-                calendar_features=None,  # TODO: Add support for calendar features
-                feature_cardinalities=None,  # TODO: Add support for feature cardinalities
-                is_first_layer=(i == 0)
-                # --- END UNIFIED ---
+                # --- REMOVED: No more positional embedding parameters ---
+                # --- END REMOVED ---
             )
             for i in range(num_layers)
         ])
@@ -484,8 +497,9 @@ class EnhancedTFNRegressor(nn.Module):
         nn.init.normal_(self.input_proj.weight, 0, 0.02)
         nn.init.zeros_(self.input_proj.bias)
         
-        # Position embedding initialization is now handled by the layers
-        # No need to initialize pos_embedding weights in the main model
+        # --- UPDATED: Position embedding initialization is now handled by the parent model ---
+        # Positional embeddings are created and initialized in __init__
+        # --- END UPDATED ---
         
         # Output projection initialization
         for layer in self.output_proj:
@@ -502,7 +516,7 @@ class EnhancedTFNRegressor(nn.Module):
         
         Args:
             inputs: Input continuous features [B, N, input_dim]
-            positions: Token positions [B, N, P] (optional, positional embeddings added by first layer)
+            positions: Token positions [B, N, P] (optional, will be generated if None)
             calendar_features: Optional calendar features for time-based positional embeddings
             
         Returns:
@@ -521,12 +535,15 @@ class EnhancedTFNRegressor(nn.Module):
             positions = positions.unsqueeze(0).expand(batch_size, -1)  # [B, N]
             positions = positions.unsqueeze(-1)  # [B, N, 1]
         
-        # Pass embeddings directly to layers - positional embeddings are added by each layer
-        x = embeddings
+        # --- FIXED: Add positional embeddings in parent model ---
+        # Create positional embeddings and add them to token embeddings
+        pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
+        x = embeddings + pos_emb  # Combine them ONCE here
+        # --- END FIXED ---
         
-        # Pass through enhanced TFN layers
+        # Pass the final, position-aware embeddings to the layers
         for layer in self.layers:
-            x = layer(x, positions)
+            x = layer(x, positions)  # The layer now uses x as is, without adding more pos_emb
         
         # Final normalization
         x = self.final_norm(x)

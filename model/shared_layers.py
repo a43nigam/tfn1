@@ -14,6 +14,8 @@ __all__ = [
     "LearnedPositionalEmbeddings",
     "TimeBasedEmbeddings",
     "SinusoidalEmbeddings",
+    "ContinuousPositionalEmbeddings",
+    "AutoPositionalEmbeddingStrategy",
     "create_positional_embedding_strategy",
     "LinearAttention",
 ]
@@ -58,17 +60,14 @@ class LearnedPositionalEmbeddings(PositionalEmbeddingStrategy):
                 # [N] -> expand to [1, N]
                 return self.pos(positions.unsqueeze(0))
         else:
-            # Continuous positions - convert to indices
-            # This is a fallback for when continuous positions are passed to learned embeddings
-            # In practice, use 'continuous' or 'sinusoidal' strategy for continuous positions
-            seq_len = positions.shape[1] if positions.dim() > 1 else positions.shape[0]
-            idx = torch.arange(seq_len, device=positions.device)
-            
-            # Ensure the embedding layer is on the same device as the input tensor
-            if self.pos.weight.device != positions.device:
-                self.pos = self.pos.to(positions.device)
-            
-            return self.pos(idx)
+            # Continuous positions - this strategy is not designed for continuous data
+            # Raise an error to prevent silent failures that would invalidate benchmarks
+            raise ValueError(
+                f"LearnedPositionalEmbeddings received continuous positions with dtype {positions.dtype}. "
+                f"This strategy is designed for discrete, sequential indices only. "
+                f"For continuous data, use 'continuous' or 'sinusoidal' strategy instead. "
+                f"Received positions shape: {positions.shape}, values: {positions[:3] if positions.numel() > 0 else 'empty'}"
+            )
 
     def __call__(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:
         """Make the object callable."""
@@ -252,8 +251,21 @@ class SinusoidalEmbeddings(PositionalEmbeddingStrategy):
     
     def forward(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:
         """Forward pass for sinusoidal embeddings."""
-        seq_len = positions.shape[1] if positions.dim() > 1 else positions.shape[0]
-        return self.pe[:seq_len].to(positions.device)
+        # Handle different input shapes
+        if positions.dim() == 1:
+            # [N] -> [N, D]
+            seq_len = positions.shape[0]
+            return self.pe[:seq_len].to(positions.device)
+        elif positions.dim() == 2:
+            # [B, N] -> [B, N, D]
+            batch_size, seq_len = positions.shape
+            pe_expanded = self.pe[:seq_len].to(positions.device)  # [N, D]
+            return pe_expanded.unsqueeze(0).expand(batch_size, -1, -1)  # [B, N, D]
+        else:
+            # [B, N, P] -> [B, N, D] (ignore P, use N for sequence length)
+            batch_size, seq_len = positions.shape[:2]
+            pe_expanded = self.pe[:seq_len].to(positions.device)  # [N, D]
+            return pe_expanded.unsqueeze(0).expand(batch_size, -1, -1)  # [B, N, D]
 
     def __call__(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:
         """Make the object callable."""
@@ -295,19 +307,28 @@ class ContinuousPositionalEmbeddings(PositionalEmbeddingStrategy):
         
         batch_size, seq_len, pos_dim = positions.shape
         
+        # Handle case where pos_dim > embed_dim by truncating or using a different approach
+        if pos_dim > self.embed_dim:
+            # Truncate to first embed_dim dimensions
+            positions = positions[:, :, :self.embed_dim]
+            pos_dim = self.embed_dim
+        
         # Create sinusoidal embeddings for each spatial dimension
         embeddings = []
+        
+        # Calculate how many embedding dimensions to allocate per position dimension
+        if pos_dim > 0:
+            embed_dim_per_pos = max(1, self.embed_dim // pos_dim)
+            remaining_dims = self.embed_dim - (pos_dim * embed_dim_per_pos)
+        else:
+            embed_dim_per_pos = 0
+            remaining_dims = self.embed_dim
         
         for dim in range(pos_dim):
             # Extract positions for this dimension
             pos_vals = positions[:, :, dim]  # [B, N]
             
             # Create sinusoidal embeddings for this dimension
-            # Use different frequencies for different embedding dimensions
-            embed_dim_per_pos = self.embed_dim // pos_dim
-            if dim == pos_dim - 1:  # Last dimension gets remaining dimensions
-                embed_dim_per_pos = self.embed_dim - (pos_dim - 1) * (self.embed_dim // pos_dim)
-            
             if embed_dim_per_pos > 0:
                 # Create sinusoidal embeddings
                 div_term = torch.exp(torch.arange(0, embed_dim_per_pos, 2).float() * 
@@ -320,7 +341,27 @@ class ContinuousPositionalEmbeddings(PositionalEmbeddingStrategy):
                 # Create sinusoidal embeddings
                 pe = torch.zeros(batch_size, seq_len, embed_dim_per_pos, device=positions.device)
                 pe[:, :, 0::2] = torch.sin(pos_expanded * div_term)
-                pe[:, :, 1::2] = torch.cos(pos_expanded * div_term)
+                # Only add cosine embeddings if we have at least 2 dimensions
+                if embed_dim_per_pos >= 2:
+                    pe[:, :, 1::2] = torch.cos(pos_expanded * div_term)
+                
+                embeddings.append(pe)
+        
+        # Add remaining dimensions if any
+        if remaining_dims > 0:
+            # Use the first position dimension for remaining embeddings
+            if pos_dim > 0:
+                pos_vals = positions[:, :, 0]  # [B, N]
+                div_term = torch.exp(torch.arange(0, remaining_dims, 2).float() * 
+                                   -(torch.log(torch.tensor(10000.0)) / remaining_dims))
+                div_term = div_term.to(positions.device)
+                
+                pos_expanded = pos_vals.unsqueeze(-1)  # [B, N, 1]
+                
+                pe = torch.zeros(batch_size, seq_len, remaining_dims, device=positions.device)
+                pe[:, :, 0::2] = torch.sin(pos_expanded * div_term)
+                if remaining_dims > 1:
+                    pe[:, :, 1::2] = torch.cos(pos_expanded * div_term)
                 
                 embeddings.append(pe)
         
@@ -357,8 +398,73 @@ def create_positional_embedding_strategy(strategy_name: str, max_len: int, embed
         return SinusoidalEmbeddings(max_len, embed_dim, **kwargs)
     elif strategy_name == "continuous":
         return ContinuousPositionalEmbeddings(max_len, embed_dim, **kwargs)
+    elif strategy_name == "auto":
+        # Auto-detect strategy based on data characteristics
+        return AutoPositionalEmbeddingStrategy(max_len, embed_dim, **kwargs)
     else:
         raise ValueError(f"Unknown positional embedding strategy: {strategy_name}")
+
+
+class AutoPositionalEmbeddingStrategy(PositionalEmbeddingStrategy):
+    """Automatically selects the appropriate positional embedding strategy based on data type.
+    
+    This strategy is designed to prevent the critical bug where LearnedPositionalEmbeddings
+    ignores continuous positions, which would invalidate benchmarks against TFN.
+    """
+    
+    def __init__(self, max_len: int, embed_dim: int, **kwargs) -> None:
+        super().__init__(max_len, embed_dim, **kwargs)
+        self.max_len = max_len
+        self.embed_dim = embed_dim
+        self.kwargs = kwargs
+        
+        # Create all strategies for dynamic selection
+        self.strategies = {
+            'learned': LearnedPositionalEmbeddings(max_len, embed_dim, **kwargs),
+            'continuous': ContinuousPositionalEmbeddings(max_len, embed_dim, **kwargs),
+            'sinusoidal': SinusoidalEmbeddings(max_len, embed_dim, **kwargs),
+            'time_based': TimeBasedEmbeddings(max_len, embed_dim, **kwargs)
+        }
+        
+        # Default strategy for discrete data
+        self.default_strategy = 'learned'
+    
+    def _select_strategy(self, positions: torch.Tensor) -> str:
+        """Automatically select the best strategy based on position characteristics."""
+        if positions is None:
+            return self.default_strategy
+            
+        # Check if positions are continuous (float) or discrete (integer)
+        if positions.dtype in [torch.float16, torch.float32, torch.float64]:
+            # Continuous positions - use continuous or sinusoidal strategy
+            if positions.dim() >= 3 and positions.shape[-1] > 1:
+                # Multi-dimensional continuous positions (e.g., spatial coordinates)
+                return 'continuous'
+            else:
+                # 1D continuous positions (e.g., timestamps)
+                return 'sinusoidal'
+        else:
+            # Discrete positions - use learned embeddings
+            return 'learned'
+    
+    def forward(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Forward pass with automatic strategy selection."""
+        strategy_name = self._select_strategy(positions)
+        strategy = self.strategies[strategy_name]
+        
+        # Log strategy selection for debugging
+        if hasattr(self, '_last_strategy') and self._last_strategy != strategy_name:
+            print(f"AutoPositionalEmbeddingStrategy: Selected '{strategy_name}' for positions dtype={positions.dtype}, shape={positions.shape}")
+            self._last_strategy = strategy_name
+        elif not hasattr(self, '_last_strategy'):
+            self._last_strategy = strategy_name
+            print(f"AutoPositionalEmbeddingStrategy: Selected '{strategy_name}' for positions dtype={positions.dtype}, shape={positions.shape}")
+        
+        return strategy(positions, **kwargs)
+    
+    def __call__(self, positions: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Make the object callable."""
+        return self.forward(positions, **kwargs)
 
 
 class LinearAttention(nn.Module):

@@ -59,7 +59,7 @@ class TransformerBaseline(BaseSequenceModel):
         num_layers: int = 2,
         num_heads: int = 4,
         dropout: float = 0.1,
-        positional_embedding_strategy: str = "learned",
+        positional_embedding_strategy: str = "auto",
         calendar_features: Optional[List[str]] = None,
         feature_cardinalities: Optional[Dict[str, int]] = None,
     ) -> None:
@@ -150,7 +150,9 @@ class TransformerBaseline(BaseSequenceModel):
         h = self.transformer(h)
         
         if self.task == "classification":
-            pooled = h[:, 0, :]  # [B, embed_dim] - use first token for classification
+            # FIXED: Use mean pooling instead of first token for more robust classification
+            # The first token is not a special [CLS] token in our data loaders
+            pooled = h.mean(dim=1)  # [B, embed_dim] - mean pooling over sequence
             out = self.head(pooled)
         else:
             # For regression, use the last few tokens for multi-step forecasting
@@ -179,7 +181,7 @@ class PerformerBaseline(BaseSequenceModel):
         num_layers: int = 2,
         proj_dim: int = 64,
         dropout: float = 0.1,
-        positional_embedding_strategy: str = "learned",
+        positional_embedding_strategy: str = "auto",
         calendar_features: Optional[List[str]] = None,
         feature_cardinalities: Optional[Dict[str, int]] = None,
     ) -> None:
@@ -268,7 +270,9 @@ class PerformerBaseline(BaseSequenceModel):
             h = layer(h)
         
         if self.task == "classification":
-            pooled = h[:, 0, :]  # [B, embed_dim] - use first token for classification
+            # FIXED: Use mean pooling instead of first token for more robust classification
+            # The first token is not a special [CLS] token in our data loaders
+            pooled = h.mean(dim=1)  # [B, embed_dim] - mean pooling over sequence
             out = self.head(pooled)
         else:
             # For regression, use the last few tokens for multi-step forecasting
@@ -316,7 +320,11 @@ class RoBERTaBaseline(nn.Module):
             self.input = nn.Linear(input_dim, embed_dim)
         
         # RoBERTa-style positional embeddings
-        self.pos = LearnedPositionalEmbeddings(seq_len, embed_dim)
+        self.pos = create_positional_embedding_strategy(
+            strategy_name="learned",
+            max_len=seq_len,
+            embed_dim=embed_dim
+        )
         
         # Layer normalization for embeddings
         self.embed_norm = nn.LayerNorm(embed_dim, eps=layer_norm_eps)
@@ -353,7 +361,13 @@ class RoBERTaBaseline(nn.Module):
         """x: [B, L] (classification) or [B, L, input_dim] (regression)"""
         # Embedding + positional + normalization
         h = self.input(x)
-        h = h + self.pos(min(x.size(1), self.pos.pos.num_embeddings))
+        
+        # Generate positions for positional embeddings
+        seq_len = x.size(1)
+        positions = torch.arange(seq_len, device=x.device, dtype=torch.long)
+        positions = positions.unsqueeze(0).expand(x.size(0), -1)  # [B, L]
+        
+        h = h + self.pos(positions)
         h = self.embed_norm(h)
         h = self.embed_dropout(h)
         
@@ -361,7 +375,9 @@ class RoBERTaBaseline(nn.Module):
         h = self.transformer(h)
         
         if self.task == "classification":
-            pooled = h[:, 0, :]  # [B, embed_dim]
+            # FIXED: Use mean pooling instead of first token for more robust classification
+            # The first token is not a special [CLS] token in our data loaders
+            pooled = h.mean(dim=1)  # [B, embed_dim] - mean pooling over sequence
             out = self.head(pooled)
         else:
             # Multi-step forecasting
@@ -415,7 +431,11 @@ class InformerBaseline(nn.Module):
             self.input = nn.Linear(input_dim, embed_dim)
         
         # Informer-style positional encoding
-        self.pos = LearnedPositionalEmbeddings(seq_len, embed_dim)
+        self.pos = create_positional_embedding_strategy(
+            strategy_name="learned",
+            max_len=seq_len,
+            embed_dim=embed_dim
+        )
         
         # ProbAttention layers (simplified version)
         self.layers = nn.ModuleList([
@@ -441,13 +461,20 @@ class InformerBaseline(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: [B, L] (classification) or [B, L, input_dim] (regression)"""
-        h = self.input(x) + self.pos(min(x.size(1), self.pos.pos.num_embeddings))
+        # Generate positions for positional embeddings
+        seq_len = x.size(1)
+        positions = torch.arange(seq_len, device=x.device, dtype=torch.long)
+        positions = positions.unsqueeze(0).expand(x.size(0), -1)  # [B, L]
+        
+        h = self.input(x) + self.pos(positions)
         
         for layer in self.layers:
             h = layer(h)
         
         if self.task == "classification":
-            pooled = h[:, 0, :]
+            # FIXED: Use mean pooling instead of first token for more robust classification
+            # The first token is not a special [CLS] token in our data loaders
+            pooled = h.mean(dim=1)  # [B, embed_dim] - mean pooling over sequence
             out = self.head(pooled)
         else:
             # Multi-step forecasting
@@ -490,16 +517,8 @@ class ProbAttentionLayer(nn.Module):
         k = self.k_proj(x).view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
         
-        # Simplified ProbAttention: sample top-k keys
+        # Standard attention (simplified for now)
         scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        
-        # Sample top-k attention weights
-        if L > self.factor:
-            # Keep top-k attention weights for efficiency
-            top_k = min(self.factor, L)
-            scores_topk, _ = torch.topk(scores, top_k, dim=-1)
-            scores = scores_topk
-        
         attn_weights = F.softmax(scores, dim=-1)
         attn_weights = self.dropout(attn_weights)
         

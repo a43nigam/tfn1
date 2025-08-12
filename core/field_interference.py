@@ -201,16 +201,46 @@ class CausalFieldInterference(TokenFieldInterference):
         # [B, N, D] -> [B, N, H, D//H]
         fields_reshaped = token_fields.view(batch_size, num_tokens, self.num_heads, self.head_dim)
         
-        # Create causal mask using cumulative sum for safe, differentiable computation
-        # This ensures each token only sees information from previous tokens
-        causal_fields = torch.zeros_like(fields_reshaped)
+        # --- EFFICIENT CAUSAL MASKING ---
+        # OPTIMIZATION: Replaced iterative Python for-loop with vectorized torch.cumsum
+        # 
+        # BEFORE (inefficient):
+        #   for i in range(num_tokens):
+        #       if i > 0:
+        #           causal_fields[:, i, :, :] = fields_reshaped[:, :i, :, :].mean(dim=1)
+        # 
+        # AFTER (efficient):
+        #   - Uses torch.cumsum() for parallel computation on GPU
+        #   - Single pass through the sequence instead of O(N²) operations
+        #   - Leverages PyTorch's optimized tensor operations
+        #   - Maintains exact same mathematical result
+        #
+        # Mathematical equivalence:
+        #   - For token i, we need mean(fields[0:i])
+        #   - cumsum(fields)[i] = sum(fields[0:i+1])
+        #   - mean(fields[0:i]) = cumsum(fields)[i-1] / i
+        #   - Shift by 1 position to get causal context (tokens 0 to i-1)
+        #
+        # 1. Compute the cumulative sum of fields along the sequence dimension.
+        # cumsum() is a highly optimized parallel operation.
+        cumulative_sum = torch.cumsum(fields_reshaped, dim=1)
         
-        # Apply causal constraint using cumulative operations
-        for i in range(num_tokens):
-            # For token i, only include tokens 0 to i-1 (causal constraint)
-            if i > 0:
-                causal_fields[:, i, :, :] = fields_reshaped[:, :i, :, :].mean(dim=1)
-            # Token 0 has no previous context, remains zero
+        # 2. Generate a denominator for the running mean.
+        # [1.0, 2.0, 3.0, ..., num_tokens]
+        arange_divisor = torch.arange(1, num_tokens + 1, device=token_fields.device, dtype=token_fields.dtype)
+        arange_divisor = arange_divisor.view(1, -1, 1, 1)
+        
+        # 3. Compute the running mean.
+        # The mean up to token i is the cumulative sum at i divided by i+1.
+        running_mean = cumulative_sum / arange_divisor
+        
+        # 4. Create the causal context by shifting the running mean.
+        # The context for token i should only include tokens 0 to i-1.
+        # We shift the running_mean tensor to the right by one position.
+        causal_fields = torch.zeros_like(fields_reshaped)
+        if num_tokens > 1:
+            causal_fields[:, 1:, :, :] = running_mean[:, :-1, :, :]
+        # --- END EFFICIENT CAUSAL MASKING ---
         
         # Compute interference types using causal fields
         interference_terms = []

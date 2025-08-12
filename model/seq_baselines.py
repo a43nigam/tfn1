@@ -65,9 +65,20 @@ class TFNSeqModel(nn.Module):
         evolution_type: str = "cnn",
         time_steps: int = 3,
         dropout: float = 0.1,
+        positional_embedding_strategy: str = "continuous",
     ) -> None:
         super().__init__()
         self.embed = nn.Embedding(vocab_size, embed_dim)
+        
+        # --- ADDED: Configurable positional embeddings ---
+        from .shared_layers import create_positional_embedding_strategy
+        self.pos_embedding = create_positional_embedding_strategy(
+            strategy_name=positional_embedding_strategy,
+            max_len=seq_len,
+            embed_dim=embed_dim
+        )
+        # --- END ADDED ---
+        
         self.tfn = TrainableTFNLayer(
             embed_dim=embed_dim, 
             grid_size=grid_size,
@@ -81,8 +92,16 @@ class TFNSeqModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # x: [B, L]
         B, L = x.shape
+        # --- FIXED: Use configurable positional embeddings ---
         pos = torch.linspace(0, 1, L, device=x.device).view(1, L, 1).expand(B, -1, -1)
+        pos_emb = self.pos_embedding(pos)  # Use factory pattern
+        # --- END FIXED ---
         h = self.embed(x)
+        
+        # Add positional embeddings to token embeddings
+        h = h + pos_emb
+        
+        # Pass to TFN layer (now with position-aware inputs)
         h = self.tfn(h, pos)  # [B, L, D]
         logits = self.out_proj(h)  # [B, L, V]
         return logits
@@ -102,11 +121,21 @@ class SimpleTransformerSeqModel(nn.Module):
         num_layers: int = 2,
         num_heads: int = 4,
         dropout: float = 0.1,
+        positional_embedding_strategy: str = "learned",
     ) -> None:
         super().__init__()
         self.embed_dim = embed_dim
         self.embed = nn.Embedding(vocab_size, embed_dim)
-        self.pos = LearnedPositionalEmbeddings(seq_len, embed_dim)
+        
+        # --- FIXED: Use factory pattern for positional embeddings ---
+        from .shared_layers import create_positional_embedding_strategy
+        self.pos_embedding = create_positional_embedding_strategy(
+            strategy_name=positional_embedding_strategy,
+            max_len=seq_len,
+            embed_dim=embed_dim
+        )
+        # --- END FIXED ---
+        
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
             nhead=num_heads,
@@ -118,7 +147,14 @@ class SimpleTransformerSeqModel(nn.Module):
         self.out_proj = nn.Linear(embed_dim, vocab_size, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # x: [B, L]
-        h = self.embed(x) + self.pos(x.size(1))
+        # --- FIXED: Pass proper tensor to positional embedding factory ---
+        seq_len = x.size(1)
+        pos_indices = torch.arange(seq_len, device=x.device, dtype=torch.long)
+        pos_indices = pos_indices.unsqueeze(0).expand(x.size(0), -1)  # [B, L]
+        pos_embeddings = self.pos_embedding(pos_indices)
+        # --- END FIXED ---
+        
+        h = self.embed(x) + pos_embeddings
         h = self.transformer(h)
         logits = self.out_proj(h)
         return logits
@@ -176,10 +212,20 @@ class SimplePerformerSeqModel(nn.Module):
         num_layers: int = 2,
         proj_dim: int = 64,
         dropout: float = 0.1,
+        positional_embedding_strategy: str = "learned",
     ) -> None:
         super().__init__()
         self.embed = nn.Embedding(vocab_size, embed_dim)
-        self.pos = LearnedPositionalEmbeddings(seq_len, embed_dim)
+        
+        # --- FIXED: Use factory pattern for positional embeddings ---
+        from .shared_layers import create_positional_embedding_strategy
+        self.pos_embedding = create_positional_embedding_strategy(
+            strategy_name=positional_embedding_strategy,
+            max_len=seq_len,
+            embed_dim=embed_dim
+        )
+        # --- END FIXED ---
+        
         self.layers = nn.ModuleList(
             [
                 nn.Sequential(
@@ -197,7 +243,14 @@ class SimplePerformerSeqModel(nn.Module):
         self.out_proj = nn.Linear(embed_dim, vocab_size, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # x: [B, L]
-        h = self.embed(x) + self.pos(x.size(1))
+        # --- FIXED: Pass proper tensor to positional embedding factory ---
+        seq_len = x.size(1)
+        pos_indices = torch.arange(seq_len, device=x.device, dtype=torch.long)
+        pos_indices = pos_indices.unsqueeze(0).expand(x.size(0), -1)  # [B, L]
+        pos_embeddings = self.pos_embedding(pos_indices)
+        # --- END FIXED ---
+        
+        h = self.embed(x) + pos_embeddings
         for layer in self.layers:
             residual = h
             h = layer(h)
