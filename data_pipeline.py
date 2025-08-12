@@ -4,6 +4,79 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Any, Dict, List, Optional
 
+def heat_equation_transformer_collate(batch: List[Dict[str, torch.Tensor]], config: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+    """
+    Special collate function for heat equation data when used with Transformer models.
+    
+    This function converts continuous floating-point values to discrete token indices
+    that the Transformer's embedding layer can handle.
+    
+    Args:
+        batch: List of dictionaries with heat equation data
+        config: Configuration dictionary containing model and data parameters
+    
+    Returns:
+        Dictionary with tokenized format for Transformer models
+    """
+    try:
+        # Get quantization parameters from config with sensible defaults
+        vocab_size = config.get("model", {}).get("vocab_size", 1000)
+        min_val = config.get("data", {}).get("min_val", -1.0)
+        max_val = config.get("data", {}).get("max_val", 1.0)
+        
+        print(f"🔧 Quantization parameters: vocab_size={vocab_size}, range=[{min_val}, {max_val}]")
+        
+        # Stack inputs and targets
+        inputs = torch.stack([item['inputs'] for item in batch])  # [B, seq_len, features]
+        targets = torch.stack([item['targets'] for item in batch])  # [B, seq_len, features]
+        
+        # Get positions if available
+        positions = None
+        if 'positions' in batch[0]:
+            positions = torch.stack([item['positions'] for item in batch])
+        
+        # Quantize continuous values to discrete tokens
+        # Scale values from [min_val, max_val] to [0, vocab_size-1]
+        def quantize_to_tokens(values: torch.Tensor) -> torch.Tensor:
+            # Clamp values to valid range
+            values_clamped = torch.clamp(values, min_val, max_val)
+            
+            # Normalize to [0, 1]
+            values_normalized = (values_clamped - min_val) / (max_val - min_val)
+            
+            # Scale to [0, vocab_size-1] and convert to long
+            tokens = (values_normalized * (vocab_size - 1)).long()
+            
+            return tokens
+        
+        # Convert inputs and targets to discrete tokens
+        input_tokens = quantize_to_tokens(inputs.squeeze(-1))  # Remove feature dim, [B, seq_len]
+        target_tokens = quantize_to_tokens(targets.squeeze(-1))  # Remove feature dim, [B, seq_len]
+        
+        # Create attention mask (all positions are valid for heat equation)
+        attention_mask = torch.ones_like(input_tokens, dtype=torch.long)
+        
+        # Return in language modeling format for Transformer
+        result = {
+            'inputs': input_tokens,
+            'attention_mask': attention_mask,
+            'labels': target_tokens
+        }
+        
+        # Add positions if available
+        if positions is not None:
+            result['positions'] = positions
+        
+        print(f"✅ Successfully quantized batch: {input_tokens.shape} -> {input_tokens.dtype}")
+        return result
+        
+    except Exception as e:
+        print(f"❌ Error in heat_equation_transformer_collate: {e}")
+        print(f"   Batch keys: {[item.keys() for item in batch]}")
+        print(f"   First item shapes: {[(k, v.shape, v.dtype) for k, v in batch[0].items()]}")
+        raise
+
+
 def language_modeling_collate(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
     """
     Collate function for language modeling datasets (WikiText, PG19).
@@ -223,7 +296,7 @@ def dataloader_factory(config: Dict[str, Any], split: str = 'train') -> Dataset:
 
 def get_dataloader(config: Dict[str, Any], split: str = 'train') -> DataLoader:
     """
-    Get DataLoader with proper collation based on dataset and task.
+    Get DataLoader with proper collation based on dataset and model.
     
     Args:
         config: Configuration dictionary
@@ -238,6 +311,13 @@ def get_dataloader(config: Dict[str, Any], split: str = 'train') -> DataLoader:
     # Determine task type for proper collation
     data_cfg = config.get("data", {})
     dataset_name = data_cfg.get("dataset_name", "synthetic")
+    model_name = config.get("model", {}).get("model_name", "unknown")
+    
+    # Debug information
+    print(f"🔍 DataLoader Debug:")
+    print(f"   Dataset: {dataset_name}")
+    print(f"   Model: {model_name}")
+    print(f"   Split: {split}")
     
     # Auto-detect task based on dataset and model
     task = data_cfg.get("task", "regression")  # Default to regression for time series
@@ -252,11 +332,44 @@ def get_dataloader(config: Dict[str, Any], split: str = 'train') -> DataLoader:
     elif dataset_name == "synthetic":
         task = data_cfg.get("task", "copy")
     
-    # Get batch size from config
-    batch_size = config.get("training", {}).get("batch_size", 32)
+    # Special handling for heat equation with Transformer models
+    # Heat equation returns continuous values but Transformers need discrete tokens
+    # Check both config and actual dataset instance
+    is_heat_equation = (
+        dataset_name == "heat_equation" or 
+        (hasattr(dataset, 'dataset_type') and dataset.dataset_type == 'heat_equation') or
+        (hasattr(dataset, 'file_path') and 'heat_equation' in str(dataset.file_path))
+    )
+    is_transformer_model = (
+        "transformer" in model_name.lower() or 
+        "baseline" in model_name.lower()
+    )
     
+    # Fallback detection: check if dataset has continuous float data
+    has_continuous_data = False
+    if hasattr(dataset, 'inputs') and hasattr(dataset, 'targets'):
+        try:
+            # Check if the data is continuous (float) and has the right shape for heat equation
+            sample_inputs = dataset.inputs[0] if len(dataset.inputs) > 0 else None
+            if sample_inputs is not None:
+                has_continuous_data = (
+                    sample_inputs.dtype == torch.float32 and 
+                    sample_inputs.dim() >= 2 and  # [seq_len, features] or similar
+                    sample_inputs.shape[-1] == 1  # Single feature dimension
+                )
+        except:
+            pass
+    
+    if (is_heat_equation or has_continuous_data) and is_transformer_model:
+        print(f"⚠️  Detected heat equation/continuous data with Transformer/Baseline model: {model_name}")
+        print(f"   Dataset: {dataset_name} (type: {getattr(dataset, 'dataset_type', 'unknown')})")
+        print(f"   File path: {getattr(dataset, 'file_path', 'unknown')}")
+        print(f"   Has continuous data: {has_continuous_data}")
+        print(f"   Task: {task}")
+        print(f"   Using special quantization collate function")
+        collate_fn = lambda batch: heat_equation_transformer_collate(batch, config)
     # Use appropriate collation function
-    if dataset_name == "delayed_copy":  # Special handling for this synthetic task
+    elif dataset_name == "delayed_copy":  # Special handling for this synthetic task
         collate_fn = synthetic_seq_collate
     elif task == "classification":
         # For classification, we need special handling
@@ -267,6 +380,9 @@ def get_dataloader(config: Dict[str, Any], split: str = 'train') -> DataLoader:
     else:
         # For regression/copy tasks
         collate_fn = lambda batch: pad_collate(batch, task=task)
+    
+    # Get batch size from config
+    batch_size = config.get("training", {}).get("batch_size", 32)
     
     return DataLoader(
         dataset,

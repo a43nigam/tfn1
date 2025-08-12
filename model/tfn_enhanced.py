@@ -88,7 +88,6 @@ class EnhancedTFNLayer(nn.Module):
             self.field_projector = LowRankFieldProjector(
                 embed_dim=embed_dim,
                 pos_dim=pos_dim,
-                grid_size=grid_size,
                 kernel_type=kernel_type,
                 proj_dim=proj_dim
             )

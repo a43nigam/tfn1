@@ -266,26 +266,24 @@ class LowRankFieldProjector(nn.Module):
     the full [B, N, D, M] intermediate tensor, saving memory and computation.
     
     This class implements a memory-efficient alternative to the standard FieldProjector
-    by projecting both embeddings and kernel values into a shared low-rank space
-    before computing their interaction. This avoids the memory-intensive outer product
-    operation while maintaining the core field projection functionality.
+    by projecting embeddings into a low-rank space and then using the full kernel
+    matrix to perform a weighted sum of these projected embeddings. This correctly
+    maps token-specific information to each grid point while avoiding memory issues.
     
     Mathematical formulation:
-        F(z) = U(Σᵢ P(Eᵢ) ⊙ P(Kᵢ(z, μᵢ, θᵢ)))
+        F(z_m) = U(Σᵢ Kᵢ(z_m, μᵢ, θᵢ) * P(Eᵢ))
     
     Where:
         - Eᵢ = embedding of token i
-        - Kᵢ = kernel of token i
+        - Kᵢ = kernel of token i at grid point z_m
         - P(·) = projection to low-rank space
-        - ⊙ = element-wise product
         - U(·) = upsampling from low-rank space
-        - F(z) = continuous field at position z
+        - F(z_m) = continuous field at grid point z_m
     """
     
     def __init__(self,
                  embed_dim: int,
                  pos_dim: int,
-                 grid_size: int,  # Needed for the kernel projection layer
                  kernel_type: str = "rbf",
                  proj_dim: int = 64,  # The dimension of the low-rank space
                  default_kernel_params: Optional[dict] = None):
@@ -295,7 +293,6 @@ class LowRankFieldProjector(nn.Module):
         Args:
             embed_dim: Dimension of token embeddings
             pos_dim: Dimension of position space
-            grid_size: Size of the spatial grid (number of grid points)
             kernel_type: Type of kernel to use ("rbf", "compact", "fourier", "multi_frequency_fourier", "data_dependent_rbf", "data_dependent_compact", "film_learnable")
             proj_dim: Dimension of the low-rank projection space
             default_kernel_params: Default parameters for kernel initialization
@@ -304,7 +301,6 @@ class LowRankFieldProjector(nn.Module):
         
         self.embed_dim = embed_dim
         self.pos_dim = pos_dim
-        self.grid_size = grid_size
         self.proj_dim = proj_dim
         self.kernel_type = kernel_type
         
@@ -330,17 +326,17 @@ class LowRankFieldProjector(nn.Module):
             # Default to RBF kernel for unknown types
             self.kernel = RBFKernel(pos_dim=pos_dim, **default_kernel_params)
         
-        # --- New Projection Layers ---
+        # --- Reworked Projection Layers ---
+        # Project embeddings down to the low-rank space
         self.embedding_projector = nn.Linear(embed_dim, proj_dim)
-        self.kernel_projector = nn.Linear(grid_size, proj_dim)
+        
+        # Upsample the aggregated latent field back to the full embedding dimension
         self.field_upsampler = nn.Linear(proj_dim, embed_dim)
         
         # Initialize projection layers with appropriate scaling
         nn.init.xavier_uniform_(self.embedding_projector.weight)
-        nn.init.xavier_uniform_(self.kernel_projector.weight)
         nn.init.xavier_uniform_(self.field_upsampler.weight)
         nn.init.zeros_(self.embedding_projector.bias)
-        nn.init.zeros_(self.kernel_projector.bias)
         nn.init.zeros_(self.field_upsampler.bias)
     
     def forward(self,
@@ -367,8 +363,8 @@ class LowRankFieldProjector(nn.Module):
         if grid_points.dim() == 2:
             grid_points = grid_points.unsqueeze(0).expand(batch_size, -1, -1)  # [M, P] -> [B, M, P]
         
-        # 1. Compute kernel values, same as before
-        # kernel_values shape: [B, N, M] where M is grid_size
+        # 1. Compute kernel values, same as before. This is correct.
+        #    Resulting shape: kernel_values [B, N, M]
         if self.kernel_type in ["data_dependent_rbf", "data_dependent_compact", "film_learnable"]:
             kernel_values = self.kernel(grid_points, positions, embeddings)  # [B, N, M]
         else:
@@ -385,27 +381,22 @@ class LowRankFieldProjector(nn.Module):
             
             kernel_values = self.kernel(grid_points, positions, kernel_params)  # [B, N, M]
         
-        # 2. Project embeddings and kernel values to the low-rank space
+        # 2. Project token embeddings into the low-rank space.
         #    [B, N, D] -> [B, N, d_proj]
         projected_embeddings = self.embedding_projector(embeddings)
-        #    [B, N, M] -> [B, N, d_proj]
-        projected_kernels = self.kernel_projector(kernel_values)
         
-        # 3. Combine in the latent space
-        #    Element-wise product is a simple and effective choice
-        latent_interaction = projected_embeddings * projected_kernels  # [B, N, d_proj]
+        # 3. Aggregate in latent space using the kernel values as weights.
+        #    This is the core of the fix. We are calculating a weighted sum of the
+        #    projected embeddings for each grid point 'm'.
+        #    einsum('bnm,bnp->bmp') means:
+        #    for each batch 'b' and grid point 'm', sum over tokens 'n'
+        #    the product of kernel_value(n,m) and projected_embedding(n,p).
+        latent_field = torch.einsum('bnm,bnp->bmp', kernel_values, projected_embeddings)
+        #    Resulting shape: [B, M, d_proj]
         
-        # 4. Aggregate over the sequence dimension to form the latent field
-        #    [B, N, d_proj] -> [B, d_proj]
-        latent_field = torch.sum(latent_interaction, dim=1)
-        
-        # 5. Project the latent field back up to the full embedding dimension
-        #    [B, d_proj] -> [B, D]
-        aggregated_field_vectors = self.field_upsampler(latent_field)
-        
-        # 6. Expand to the grid size to create the final field
-        #    [B, D] -> [B, 1, D] -> [B, M, D]
-        final_field = aggregated_field_vectors.unsqueeze(1).expand(-1, num_grid_points, -1)
+        # 4. Project the latent field back up to the full embedding dimension.
+        #    [B, M, d_proj] -> [B, M, D]
+        final_field = self.field_upsampler(latent_field)
         
         return final_field
     
@@ -452,16 +443,17 @@ class LowRankFieldProjector(nn.Module):
         
         # Project to low-rank space
         projected_embeddings = self.embedding_projector(embeddings)  # [B, N, d_proj]
-        projected_kernels = self.kernel_projector(kernel_values)     # [B, N, d_proj]
         
         # Compute individual token influences in low-rank space
-        latent_influences = projected_embeddings * projected_kernels  # [B, N, d_proj]
+        # For each token n, compute its influence at each grid point m
+        # [B, N, d_proj] * [B, N, M] -> [B, N, M, d_proj]
+        # We need to expand kernel_values to match the projection dimension
+        kernel_expanded = kernel_values.unsqueeze(-1)  # [B, N, M, 1]
+        latent_influences = projected_embeddings.unsqueeze(2) * kernel_expanded  # [B, N, M, d_proj]
         
-        # Project back to full dimension for each token
-        token_influences = self.field_upsampler(latent_influences)  # [B, N, D]
-        
-        # Expand to grid size: [B, N, D] -> [B, N, 1, D] -> [B, N, M, D]
-        token_influences = token_influences.unsqueeze(2).expand(-1, -1, num_grid_points, -1)
+        # Project back to full dimension for each token and grid point
+        # [B, N, M, d_proj] -> [B, N, M, D]
+        token_influences = self.field_upsampler(latent_influences)
         
         return token_influences
     
@@ -481,10 +473,10 @@ class LowRankFieldProjector(nn.Module):
         standard_memory = batch_size * num_tokens * self.embed_dim * grid_size
         
         # LowRankFieldProjector memory usage
-        # Intermediate tensors: [B, N, d_proj] + [B, N, d_proj] + [B, d_proj] + [B, D]
-        low_rank_memory = (batch_size * num_tokens * self.proj_dim * 2 + 
-                          batch_size * self.proj_dim + 
-                          batch_size * self.embed_dim)
+        # Intermediate tensors: [B, N, d_proj] + [B, M, d_proj] + [B, M, D]
+        low_rank_memory = (batch_size * num_tokens * self.proj_dim + 
+                          batch_size * grid_size * self.proj_dim + 
+                          batch_size * grid_size * self.embed_dim)
         
         memory_savings = standard_memory - low_rank_memory
         savings_ratio = memory_savings / standard_memory if standard_memory > 0 else 0

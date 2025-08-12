@@ -66,33 +66,55 @@ class SyntheticTaskDataset(Dataset):
         data_keys = set(self.data.keys()) - {'metadata'}
         
         if 'initial_conditions' in data_keys and 'solutions' in data_keys:
-            # Heat equation dataset
+            # Heat equation dataset - FIXED: Now implements autoregressive next-step prediction
             self.dataset_type = 'heat_equation'
             
-            # --- FIX: Reshape data for TFN compatibility ---
+            # --- AUTOREGRESSIVE APPROACH: Test one-step evolution learning ---
             # Original data shapes:
             # initial_conditions: [n_samples, grid_points]
             # solutions: [n_samples, seq_len, grid_points]
             
-            # 1. Reshape the input to [n_samples, grid_points, 1]
-            # The spatial grid becomes the sequence dimension
-            self.inputs = self.data['initial_conditions'].unsqueeze(-1)  # [n_samples, grid_points, 1]
-
-            # 2. Select a single future timestep as the target
-            # This simplifies the task to a standard sequence-to-sequence problem
-            target_timestep = self.data['solutions'].shape[1] - 1  # Use the last timestep
-            self.targets = self.data['solutions'][:, target_timestep, :].unsqueeze(-1)  # [n_samples, grid_points, 1]
+            # Create training pairs for next-step prediction:
+            # Pair 1: (Input: u(x, t=0), Target: u(x, t=1))
+            # Pair 2: (Input: u(x, t=1), Target: u(x, t=2))
+            # ... and so on
             
-            # 3. Store the grid to be used as positions
+            n_samples, seq_len, grid_points = self.data['solutions'].shape
+            
+            # For each simulation run, create (seq_len - 1) training pairs
+            # This dramatically increases the amount of training data
+            total_pairs = n_samples * (seq_len - 1)
+            
+            # Reshape to create training pairs
+            # Inputs: all timesteps except the last [total_pairs, grid_points]
+            self.inputs = self.data['solutions'][:, :-1, :].reshape(-1, grid_points)
+            # Targets: all timesteps except the first [total_pairs, grid_points]
+            self.targets = self.data['solutions'][:, 1:, :].reshape(-1, grid_points)
+            
+            # Add feature dimension for TFN compatibility
+            self.inputs = self.inputs.unsqueeze(-1)   # [total_pairs, grid_points, 1]
+            self.targets = self.targets.unsqueeze(-1) # [total_pairs, grid_points, 1]
+            
+            # Store the spatial grid to be used as positions
             if 'grid' in self.data:
                 self.grid = self.data['grid']
             else:
-                grid_points = self.inputs.shape[1]
                 self.grid = torch.linspace(0, 1, grid_points)
             
-            # 4. Set positions to None since we'll generate them per-sample in __getitem__
+            # Store metadata about the transformation
+            self.original_n_samples = n_samples
+            self.original_seq_len = seq_len
+            self.original_grid_points = grid_points
+            self.total_pairs = total_pairs
+            
+            # Set positions to None since we'll generate them per-sample in __getitem__
             self.positions = None
-            # --- FIX ENDS HERE ---
+            
+            print(f"Transformed heat equation data:")
+            print(f"  Original: {n_samples} simulations × {seq_len} timesteps × {grid_points} grid points")
+            print(f"  Training pairs: {total_pairs} (input→target) pairs")
+            print(f"  Data expansion factor: {total_pairs / n_samples:.1f}x")
+            # --- AUTOREGRESSIVE APPROACH ENDS HERE ---
                 
         elif 'inputs' in data_keys and 'targets' in data_keys and 'positions' in data_keys:
             # Irregular sampling dataset
@@ -220,6 +242,17 @@ class SyntheticTaskDataset(Dataset):
             'input_shape': tuple(self.inputs.shape[1:]),  # Shape without batch dimension
             'target_shape': tuple(self.targets.shape[1:])
         })
+        
+        if self.dataset_type == 'heat_equation':
+            # Add heat equation specific metadata
+            meta.update({
+                'original_n_samples': getattr(self, 'original_n_samples', None),
+                'original_seq_len': getattr(self, 'original_seq_len', None),
+                'original_grid_points': getattr(self, 'original_grid_points', None),
+                'total_pairs': getattr(self, 'total_pairs', None),
+                'training_approach': 'autoregressive_next_step_prediction',
+                'description': 'Heat equation: learn one-step evolution operator from consecutive timesteps'
+            })
         
         if self.positions is not None:
             meta['position_shape'] = tuple(self.positions.shape[1:])

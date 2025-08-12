@@ -351,18 +351,37 @@ class LanguageModelingStrategy(TaskStrategy):
     def calculate_metrics(self, logits: torch.Tensor, targets: torch.Tensor, scaler: Optional[Any] = None, **kwargs) -> Dict[str, float]:
         # For language modeling - next token prediction accuracy
         # logits should be in original shape [B, L, vocab_size], targets [B, L]
+        
+        # Handle empty batch case
+        if logits.numel() == 0 or targets.numel() == 0:
+            return {"acc": 0.0}
+        
+        # Flatten for easier processing
         logits_flat = logits.view(-1, logits.size(-1))
         targets_flat = targets.view(-1)
         
-        # Ignore padding tokens (targets == -100)
-        valid_mask = targets_flat != -100
+        # --- THIS IS THE CRITICAL FIX ---
+        # Create a mask for valid (non-padding, non-ignored) tokens.
+        # For delayed_copy, target is 0 for padding. For standard LM, it's -100.
+        # We need to handle both cases intelligently.
+        
+        # Check if this is likely a delayed_copy task (targets contain 0s and are mostly 0)
+        if targets_flat.dtype == torch.long and targets_flat.max() <= 10:  # delayed_copy uses small vocab
+            # For delayed_copy: ignore targets == 0 (padding)
+            valid_mask = (targets_flat != 0)
+        else:
+            # For standard language modeling: ignore targets == -100 (padding)
+            valid_mask = (targets_flat != -100)
+        
+        # If there are no valid tokens in the batch, return 0 accuracy.
         if valid_mask.sum() == 0:
             return {"acc": 0.0}
-        
+
         preds = torch.argmax(logits_flat, dim=-1)
-        correct = (preds == targets_flat).float()
-        # Only count valid tokens (not padding)
-        correct = correct[valid_mask].sum().item()
-        total = valid_mask.sum().item()
-        accuracy = correct / total if total > 0 else 0.0
+        
+        # Compare predictions and targets only at valid positions
+        correct_predictions = (preds == targets_flat)[valid_mask].float().sum()
+        num_valid_tokens = valid_mask.sum().item()
+        
+        accuracy = correct_predictions / num_valid_tokens if num_valid_tokens > 0 else 0.0
         return {"acc": accuracy} 

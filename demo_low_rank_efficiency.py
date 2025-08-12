@@ -59,7 +59,7 @@ def benchmark_projectors(batch_size=2, num_tokens=64, embed_dim=256, pos_dim=2, 
     
     # Initialize projectors
     standard_projector = FieldProjector(embed_dim, pos_dim, 'rbf').to(device)
-    low_rank_projector = LowRankFieldProjector(embed_dim, pos_dim, grid_size, 'rbf', proj_dim).to(device)
+    low_rank_projector = LowRankFieldProjector(embed_dim, pos_dim, 'rbf', proj_dim).to(device)
     
     # Warm up (run once to initialize CUDA if available)
     if device.type == 'cuda':

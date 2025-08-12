@@ -20,6 +20,17 @@ from typing import Tuple, Optional, Dict, Any
 import math
 
 
+class NoOpInterference(nn.Module):
+    """A no-op module that acts as an additive identity for ablation studies."""
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+    def forward(self, token_fields: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        # Returns a zero tensor with the same shape and device, acting as an
+        # additive identity (x + 0 = x).
+        return torch.zeros_like(token_fields)
+
+
 class TokenFieldInterference(nn.Module):
     """
     Token-centric field interference mechanism.
@@ -356,12 +367,12 @@ class MultiScaleFieldInterference(TokenFieldInterference):
 def create_field_interference(interference_type: str = "standard",
                             embed_dim: int = 256,
                             num_heads: int = 8,
-                            **kwargs) -> TokenFieldInterference:
+                            **kwargs) -> nn.Module:
     """
     Factory function to create field interference modules.
     
     Args:
-        interference_type: Type of interference ("standard", "causal", "multiscale")
+        interference_type: Type of interference ("standard", "causal", "multiscale", "none")
         embed_dim: Dimension of token embeddings
         num_heads: Number of interference heads
         **kwargs: Additional arguments for specific interference types
@@ -369,6 +380,9 @@ def create_field_interference(interference_type: str = "standard",
     Returns:
         Configured field interference module
     """
+    if interference_type is None or interference_type.lower() == 'none':
+        return NoOpInterference()
+
     if interference_type == "standard":
         return TokenFieldInterference(embed_dim, num_heads, **kwargs)
     elif interference_type == "causal":

@@ -198,12 +198,13 @@ MODEL_REGISTRY = {
         'evolution_types': [],
         'components': ['transformer_encoder', 'classification_head'],
         'required_params': ['vocab_size', 'embed_dim', 'num_classes'],
-        'optional_params': ['seq_len', 'num_layers', 'num_heads', 'dropout'],
+        'optional_params': ['seq_len', 'num_layers', 'num_heads', 'dropout', 'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities'],
         'defaults': {
             'seq_len': 512,
             'num_layers': 2,
             'num_heads': 4,
-            'dropout': 0.1
+            'dropout': 0.1,
+            'positional_embedding_strategy': 'learned'
         }
     },
     
@@ -213,12 +214,13 @@ MODEL_REGISTRY = {
         'evolution_types': [],
         'components': ['performer_encoder', 'classification_head'],
         'required_params': ['vocab_size', 'embed_dim', 'num_classes'],
-        'optional_params': ['seq_len', 'num_layers', 'proj_dim', 'dropout'],
+        'optional_params': ['seq_len', 'num_layers', 'proj_dim', 'dropout', 'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities'],
         'defaults': {
             'seq_len': 512,
             'num_layers': 2,
             'proj_dim': 64,
-            'dropout': 0.1
+            'dropout': 0.1,
+            'positional_embedding_strategy': 'learned'
         }
     },
     
@@ -305,12 +307,13 @@ MODEL_REGISTRY = {
         'evolution_types': [],
         'components': ['transformer_encoder', 'regression_head'],
         'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len'],
-        'optional_params': ['seq_len', 'num_layers', 'num_heads', 'dropout'],
+        'optional_params': ['seq_len', 'num_layers', 'num_heads', 'dropout', 'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities'],
         'defaults': {
             'seq_len': 512,
             'num_layers': 2,
             'num_heads': 4,
-            'dropout': 0.1
+            'dropout': 0.1,
+            'positional_embedding_strategy': 'learned'
         }
     },
     
@@ -320,12 +323,13 @@ MODEL_REGISTRY = {
         'evolution_types': [],
         'components': ['performer_encoder', 'regression_head'],
         'required_params': ['input_dim', 'embed_dim', 'output_dim', 'output_len'],
-        'optional_params': ['seq_len', 'num_layers', 'proj_dim', 'dropout'],
+        'optional_params': ['seq_len', 'num_layers', 'proj_dim', 'dropout', 'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities'],
         'defaults': {
             'seq_len': 512,
             'num_layers': 2,
             'proj_dim': 64,
-            'dropout': 0.1
+            'dropout': 0.1,
+            'positional_embedding_strategy': 'learned'
         }
     },
     

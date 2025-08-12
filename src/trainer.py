@@ -241,6 +241,7 @@ class Trainer:
         All data loaders now return a standardized format:
         - For regression/copy tasks: {"inputs": ..., "targets": ...}
         - For classification tasks: {"inputs": ..., "labels": ...}
+        - For Transformer language modeling: {"inputs": ..., "labels": ..., "attention_mask": ...}
         - Optional "attention_mask" for NLP tasks
         - Optional "positions" for PDE datasets
         
@@ -266,7 +267,7 @@ class Trainer:
             return model_input, targets, positions
         
         elif "inputs" in batch and "labels" in batch:
-            # Classification tasks
+            # Classification tasks or Transformer language modeling
             inputs = batch['inputs'].to(self.device)
             labels = batch['labels'].to(self.device)
             
@@ -289,7 +290,7 @@ class Trainer:
             error_msg = f"Invalid batch format: keys {available_keys}\n"
             error_msg += "Expected standardized format:\n"
             error_msg += "  - 'inputs' and 'targets' (regression/copy tasks)\n"
-            error_msg += "  - 'inputs' and 'labels' (classification tasks)\n"
+            error_msg += "  - 'inputs' and 'labels' (classification/transformer tasks)\n"
             error_msg += "  - Optional 'attention_mask' for NLP tasks\n"
             error_msg += "  - Optional 'positions' for PDE datasets\n"
             error_msg += f"Available keys: {available_keys}"

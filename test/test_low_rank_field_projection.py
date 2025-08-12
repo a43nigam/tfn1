@@ -27,22 +27,22 @@ class TestLowRankFieldProjector:
         return {
             'embed_dim': 128,
             'pos_dim': 2,
-            'grid_size': 100,
             'kernel_type': 'rbf',
             'proj_dim': 32
         }
     
     @pytest.fixture
     def sample_data(self, basic_params):
-        """Sample input data for testing."""
-        batch_size = 4
-        num_tokens = 16
+        """Sample data for testing."""
+        batch_size = 2
+        num_tokens = 8
+        grid_size = 16
         
         torch.manual_seed(42)
         
         embeddings = torch.randn(batch_size, num_tokens, basic_params['embed_dim'])
         positions = torch.randn(batch_size, num_tokens, basic_params['pos_dim'])
-        grid_points = torch.randn(batch_size, basic_params['grid_size'], basic_params['pos_dim'])
+        grid_points = torch.randn(batch_size, grid_size, basic_params['pos_dim'])
         
         return embeddings, positions, grid_points
     
@@ -52,20 +52,16 @@ class TestLowRankFieldProjector:
         
         assert projector.embed_dim == basic_params['embed_dim']
         assert projector.pos_dim == basic_params['pos_dim']
-        assert projector.grid_size == basic_params['grid_size']
         assert projector.proj_dim == basic_params['proj_dim']
         assert projector.kernel_type == basic_params['kernel_type']
         
         # Check that projection layers are created
         assert isinstance(projector.embedding_projector, nn.Linear)
-        assert isinstance(projector.kernel_projector, nn.Linear)
         assert isinstance(projector.field_upsampler, nn.Linear)
         
         # Check layer dimensions
         assert projector.embedding_projector.in_features == basic_params['embed_dim']
         assert projector.embedding_projector.out_features == basic_params['proj_dim']
-        assert projector.kernel_projector.in_features == basic_params['grid_size']
-        assert projector.kernel_projector.out_features == basic_params['proj_dim']
         assert projector.field_upsampler.in_features == basic_params['proj_dim']
         assert projector.field_upsampler.out_features == basic_params['embed_dim']
     
@@ -88,9 +84,9 @@ class TestLowRankFieldProjector:
         """Test memory savings calculation."""
         projector = LowRankFieldProjector(**basic_params)
         
-        batch_size = 4
-        num_tokens = 16
-        grid_size = basic_params['grid_size']
+        batch_size = 2
+        num_tokens = 8
+        grid_size = 16
         
         memory_info = projector.get_memory_savings(batch_size, num_tokens, grid_size)
         
@@ -109,9 +105,9 @@ class TestLowRankFieldProjector:
         expected_standard = batch_size * num_tokens * basic_params['embed_dim'] * grid_size
         assert memory_info['standard_memory'] == expected_standard
         
-        expected_low_rank = (batch_size * num_tokens * basic_params['proj_dim'] * 2 + 
-                           batch_size * basic_params['proj_dim'] + 
-                           batch_size * basic_params['embed_dim'])
+        expected_low_rank = (batch_size * num_tokens * basic_params['proj_dim'] + 
+                           batch_size * grid_size * basic_params['proj_dim'] + 
+                           batch_size * grid_size * basic_params['embed_dim'])
         assert memory_info['low_rank_memory'] == expected_low_rank
     
     def test_token_influence_computation(self, basic_params, sample_data):
@@ -141,7 +137,6 @@ class TestLowRankFieldProjector:
                 projector = LowRankFieldProjector(
                     embed_dim=64,
                     pos_dim=2,
-                    grid_size=50,
                     kernel_type=kernel_type,
                     proj_dim=16
                 )
@@ -158,7 +153,6 @@ class TestLowRankFieldProjector:
                 projector = LowRankFieldProjector(
                     embed_dim=64,
                     pos_dim=2,
-                    grid_size=50,
                     kernel_type=kernel_type,
                     proj_dim=16
                 )
@@ -172,16 +166,29 @@ class TestLowRankFieldProjector:
         embeddings, positions, _ = sample_data
         
         # Test with grid points without batch dimension
-        grid_points_no_batch = torch.randn(basic_params['grid_size'], basic_params['pos_dim'])
-        output_no_batch = projector(embeddings, positions, grid_points_no_batch)
+        grid_size = 16  # Use local variable instead of basic_params
+        grid_points_no_batch = torch.randn(grid_size, basic_params['pos_dim'])
         
         # Test with grid points with batch dimension
-        grid_points_with_batch = torch.randn(embeddings.shape[0], basic_params['grid_size'], basic_params['pos_dim'])
+        grid_points_with_batch = torch.randn(embeddings.shape[0], grid_size, basic_params['pos_dim'])
+        
+        # Both should work
+        output_no_batch = projector(embeddings, positions, grid_points_no_batch)
         output_with_batch = projector(embeddings, positions, grid_points_with_batch)
         
-        # Both should produce the same output shape
-        assert output_no_batch.shape == output_with_batch.shape
-        assert output_no_batch.shape == (embeddings.shape[0], basic_params['grid_size'], basic_params['embed_dim'])
+        # Check shapes
+        assert output_no_batch.shape == (embeddings.shape[0], grid_size, basic_params['embed_dim'])
+        assert output_with_batch.shape == (embeddings.shape[0], grid_size, basic_params['embed_dim'])
+        
+        # Check that outputs are not all zeros (basic functionality)
+        assert not torch.allclose(output_no_batch, torch.zeros_like(output_no_batch))
+        assert not torch.allclose(output_with_batch, torch.zeros_like(output_with_batch))
+        
+        # Check that outputs have reasonable values (not NaN or inf)
+        assert not torch.isnan(output_no_batch).any()
+        assert not torch.isnan(output_with_batch).any()
+        assert not torch.isinf(output_no_batch).any()
+        assert not torch.isinf(output_with_batch).any()
     
     def test_gradient_flow(self, basic_params, sample_data):
         """Test that gradients flow through the network."""
