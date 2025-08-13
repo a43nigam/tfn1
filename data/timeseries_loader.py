@@ -183,10 +183,28 @@ class ETTDataset(Dataset):
         # If output is 1D, add feature dim
         if y.ndim == 1:
             y = y[:, None]
-        return {
+       
+        # --- START FIX ---
+        batch_dict = {
             'inputs': torch.tensor(x, dtype=torch.float32),
             'targets': torch.tensor(y, dtype=torch.float32),
         }
+
+        # Add calendar features for the input window if they exist
+        if hasattr(self, 'calendar_features') and self.calendar_features is not None:
+            # Slice the calendar feature arrays for the current sample's input window
+            batch_dict['calendar_features'] = {
+                key: torch.tensor(values[i : i + self.input_len], dtype=torch.long)
+                for key, values in self.calendar_features.items()
+            }
+            # DEBUG: Print batch_dict keys to verify calendar_features is added
+            # print(f"🔍 ETTDataset.__getitem__: batch_dict.keys() = {list(batch_dict.keys())}")
+        else:
+            # print(f"⚠️  ETTDataset.__getitem__: No calendar_features found on dataset")
+            pass
+        # --- END FIX ---
+        
+        return batch_dict
 
     @staticmethod
     def get_splits(

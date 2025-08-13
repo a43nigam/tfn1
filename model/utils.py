@@ -15,7 +15,7 @@ from typing import Dict, Any
 import torch.nn as nn
 
 from model import registry
-from model.wrappers import create_revin_wrapper, create_parn_wrapper
+from model.wrappers import create_revin_wrapper, PARNModel
 
 __all__ = ["build_model"]
 
@@ -68,38 +68,50 @@ def build_model(model_name: str, model_cfg: Dict[str, Any], data_cfg: Dict[str, 
         for param in dropped:
             print(f"   - {param}: {model_args[param]}")
 
-    # Build the base model
-    base_model = model_cls(**filtered_args)
-    
     # ---- apply normalization wrappers if specified ------------------------
-    normalization_config = model_cfg.get("normalization", {})
-    normalization_type = normalization_config.get("type", None)
+    # Check for normalization_strategy in data_cfg (consistent with train.py)
+    normalization_strategy = None
+    if data_cfg is not None:
+        normalization_strategy = data_cfg.get("normalization_strategy")
     
-    if normalization_type is not None:
+    if normalization_strategy is not None:
         # Determine number of features for normalization
-        num_features = normalization_config.get("num_features")
-        if num_features is None:
-            # Try to infer from model configuration
-            if "input_dim" in model_cfg:
-                num_features = model_cfg["input_dim"]
-            elif "embed_dim" in model_cfg:
-                num_features = model_cfg["embed_dim"]
-            else:
-                raise ValueError(
-                    f"Cannot determine num_features for {normalization_type} normalization. "
-                    f"Please specify 'num_features' in the normalization config."
-                )
+        num_features = None
+        if "input_dim" in filtered_args:
+            num_features = filtered_args["input_dim"]
+        elif "embed_dim" in filtered_args:
+            num_features = filtered_args["embed_dim"]
+        else:
+            raise ValueError(
+                f"Cannot determine num_features for {normalization_strategy} normalization. "
+                f"Please specify 'input_dim' or 'embed_dim' in the model configuration."
+            )
         
-        if normalization_type.lower() == "revin":
+        if normalization_strategy.lower() == "instance":
+            # Build the base model for RevIN wrapping
+            base_model = model_cls(**filtered_args)
             print(f"🔧 Wrapping model with RevIN normalization (num_features={num_features})")
             return create_revin_wrapper(base_model, num_features)
         
-        elif normalization_type.lower() == "parn":
-            mode = normalization_config.get("mode", "location")
-            print(f"🔧 Wrapping model with PARN normalization (mode={mode})")
-            return create_parn_wrapper(base_model, num_features, mode)
+        elif normalization_strategy.lower() == "parn":
+            # --- START FIX: ADD PARN WRAPPER LOGIC ---
+            parn_mode = data_cfg.get("parn_mode", "location")
+            print(f"🔧 Wrapping model '{model_name}' with PARN wrapper.")
+            
+            # 1. Build the base model first (with all its parameters)
+            base_model = model_cls(**filtered_args)
+            
+            # 2. Build the PARNModel wrapper around the base model
+            return PARNModel(
+                base_model=base_model,
+                num_features=filtered_args['input_dim'],
+                mode=parn_mode
+            )
+            # --- END FIX ---
         
         else:
-            raise ValueError(f"Unknown normalization type: {normalization_type}. Use 'revin' or 'parn'")
+            raise ValueError(f"Unknown normalization strategy: {normalization_strategy}. Use 'instance' or 'parn'")
     
+    # Build the base model if no normalization wrapper is specified
+    base_model = model_cls(**filtered_args)
     return base_model 

@@ -7,7 +7,9 @@ while keeping the core training pipeline unchanged.
 
 import torch
 import torch.nn as nn
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
+from .shared_layers import create_positional_embedding_strategy
+from .tfn_enhanced import EnhancedTFNRegressorCore
 
 
 class RevIN(nn.Module):
@@ -140,6 +142,12 @@ class RevinModel(nn.Module):
         Returns:
             Denormalized output from the base model
         """
+        # DEBUG: Print kwargs to verify calendar_features are passed through
+        # print(f"🔍 RevinModel.forward: kwargs.keys() = {list(kwargs.keys())}")
+        # if 'calendar_features' in kwargs:
+        #     print(f"🔍 RevinModel.forward: calendar_features.keys() = {list(kwargs['calendar_features'].keys()) if kwargs['calendar_features'] else 'None'}")
+        pass
+        
         # 1. Normalize the input
         x_normalized = self.revin(x, 'norm')
         
@@ -281,65 +289,76 @@ class PARN(nn.Module):
 
 class PARNModel(nn.Module):
     """
-    A wrapper model that applies PARN to a base model. It augments the
-    input with the preserved statistics before passing to the base model.
+    A thin PARN wrapper that handles input augmentation and projection,
+    then uses the base model's positional encoding strategy.
     
     Args:
-        base_model: The model to wrap (e.g., EnhancedTFNRegressor)
-        num_features: Number of features for PARN
+        base_model: The base TFN model (e.g., EnhancedTFNRegressor)
+        num_features: Original input feature dimension
         mode: PARN normalization mode ('location', 'scale', 'full')
     """
-    def __init__(self, base_model: nn.Module, num_features: int, mode: str = 'location'):
+    def __init__(self, 
+                 base_model: nn.Module, 
+                 num_features: int, 
+                 mode: str = 'location'):
         super().__init__()
         self.base_model = base_model
-        self.parn = PARN(num_features, mode=mode)
-        self.mode = mode
+        self.parn = PARN(num_features=num_features, mode=mode)
+        
+        # --- START FIX: Wrapper handles augmented projection and its own PE ---
+        augmented_dim = num_features
+        if mode in ['location', 'full']: 
+            augmented_dim += num_features
+        if mode in ['scale', 'full']: 
+            augmented_dim += num_features
+            
+        # The wrapper has its own input projection layer
+        self.augmented_input_proj = nn.Linear(augmented_dim, self.base_model.embed_dim)
+        
+        # The wrapper also needs access to the positional embedding strategy
+        # It's best to take it from the base model to ensure consistency
+        self.pos_embedding = self.base_model.pos_embedding
+        # --- END FIX ---
+        
         self.name = f"PARNModel({base_model.__class__.__name__}, mode='{mode}')"
 
     def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
-        """
-        Forward pass with automatic normalization and denormalization.
+        # DEBUG: Print kwargs to verify calendar_features are passed through
+        # print(f"🔍 PARNModel.forward: kwargs.keys() = {list(kwargs.keys())}")
+        # if 'calendar_features' in kwargs:
+        #     print(f"🔍 PARNModel.forward: calendar_features.keys() = {list(kwargs['calendar_features'].keys()) if kwargs['calendar_features'] else 'None'}")
+        pass
         
-        Args:
-            x: Input tensor
-            **kwargs: Additional arguments passed to the base model
-            
-        Returns:
-            Denormalized output from the base model
-        """
-        # 1. Normalize the input and get preserved stats
+        # 1. Normalize and get stats
         x_norm, stats = self.parn(x, operation='norm')
         
-        # 2. Augment the input with the preserved stats
+        # 2. Augment the input with preserved stats
         augmented_input = [x_norm]
-        if 'location' in stats:
-            # Expand mean to match sequence length and append as a feature
-            loc_stat = stats['location'].expand_as(x_norm)
-            augmented_input.append(loc_stat)
-        if 'scale' in stats:
-            # Expand std to match sequence length and append as a feature
-            scale_stat = stats['scale'].expand_as(x_norm)
-            augmented_input.append(scale_stat)
-            
-        # Only concatenate if we have additional statistics
-        if len(augmented_input) > 1:
-            x_augmented = torch.cat(augmented_input, dim=-1)
-        else:
-            x_augmented = x_norm
+        if 'location' in stats: 
+            augmented_input.append(stats['location'].expand_as(x_norm))
+        if 'scale' in stats: 
+            augmented_input.append(stats['scale'].expand_as(x_norm))
+        x_augmented = torch.cat(augmented_input, dim=-1)
+
+        # 3. Project augmented input to embed_dim
+        embeddings = self.augmented_input_proj(x_augmented)
         
-        # 3. Pass the augmented input to the base model
-        output_augmented = self.base_model(x_augmented, **kwargs)
+        # 4. Add positional embeddings
+        # We must get positions and calendar_features from kwargs
+        positions = kwargs.get('positions')
+        calendar_features = kwargs.get('calendar_features')
+        pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
         
-        # 4. The model only predicts the core features, not the stats.
-        # Slice the output to get the core prediction.
-        output_normalized = output_augmented[:, :, :self.parn.num_features]
+        precomputed = embeddings + pos_emb
+
+        # 5. Call the base model, passing the precomputed embeddings
+        # The base model will now skip its own input_proj and pos_embedding steps
+        output_normalized = self.base_model(x, precomputed_embeddings=precomputed, **kwargs)
         
-        # 5. Denormalize the output
+        # 6. De-normalize the output
         output_denormalized, _ = self.parn(output_normalized, operation='denorm')
         
         return output_denormalized
-
-
 
     def get_physics_constraints(self) -> Dict[str, torch.Tensor]:
         """Get physics constraints from the base model if available."""
@@ -368,8 +387,8 @@ def create_parn_wrapper(base_model: nn.Module, num_features: int, mode: str = 'l
     Create a PARN wrapper around a base model.
     
     Args:
-        base_model: The model to wrap
-        num_features: Number of features for PARN
+        base_model: The base TFN model to wrap (e.g., EnhancedTFNRegressor)
+        num_features: Original input feature dimension
         mode: PARN normalization mode ('location', 'scale', 'full')
         
     Returns:

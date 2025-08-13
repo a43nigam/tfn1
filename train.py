@@ -158,11 +158,7 @@ def create_task_strategy(task_type: str, config: Dict[str, Any], scaler: Optiona
 
 def print_training_info(cfg: Dict[str, Any], model_name: str, model_info: Dict[str, Any], 
                        model: torch.nn.Module, device: torch.device, train_cfg: Dict[str, Any]) -> None:
-    """Print comprehensive training information including hyperparameters and model details."""
-    
-    print("\n" + "="*80)
-    print("🚀 TRAINING CONFIGURATION")
-    print("="*80)
+    """Print basic training information that appears before training starts."""
     
     # Dataset info
     data_cfg = cfg["data"]
@@ -175,40 +171,6 @@ def print_training_info(cfg: Dict[str, Any], model_name: str, model_info: Dict[s
         print(f"   Output Length: {data_cfg['output_len']}")
     if 'max_length' in data_cfg:
         print(f"   Max Length: {data_cfg['max_length']}")
-    
-    # Model info
-    print(f"\n🤖 MODEL:")
-    print(f"   Type: {model_name}")
-    print(f"   Task: {model_info['task_type']}")
-    print(f"   Components: {', '.join(model_info.get('components', []))}")
-    print(f"   Evolution Types: {', '.join(model_info.get('evolution_types', []))}")
-    
-    # Model hyperparameters
-    model_cfg = cfg["model"]
-    print(f"\n⚙️  MODEL HYPERPARAMETERS:")
-    for key, value in model_cfg.items():
-        print(f"   {key}: {value}")
-    
-    # Training hyperparameters
-    print(f"\n🎯 TRAINING HYPERPARAMETERS:")
-    for key, value in train_cfg.items():
-        print(f"   {key}: {value}")
-    
-    # Model architecture details
-    print(f"\n🏗️  MODEL ARCHITECTURE:")
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"   Total Parameters: {total_params:,}")
-    print(f"   Trainable Parameters: {trainable_params:,}")
-    print(f"   Device: {device}")
-    
-    # Print model structure (first few layers)
-    print(f"\n📋 MODEL STRUCTURE (first 3 layers):")
-    for i, (name, module) in enumerate(model.named_modules()):
-        if i >= 3:  # Only show first 3 layers
-            break
-        if len(list(module.children())) == 0:  # Leaf modules only
-            print(f"   {name}: {module}")
     
     print("\n" + "="*80)
     print("🎬 STARTING TRAINING...")
@@ -283,17 +245,16 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
     else:
         device = torch.device(device)
     
-    print(f"🔧 Using device: {device}")
+    print(f"device: {device}")
     if device.type == "cuda" and torch.cuda.is_available():
         try:
-            print(f"   GPU: {torch.cuda.get_device_name()}")
-            print(f"   Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+            print(f"   gpu: {torch.cuda.get_device_name()}")
+            print(f"   memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
         except Exception as e:
             print(f"   GPU info unavailable: {e}")
     elif device.type == "cuda" and not torch.cuda.is_available():
-        print("   ⚠️  CUDA requested but not available - falling back to CPU")
+        print(" cuda requested, unavailable - using cpu")
         device = torch.device("cpu")
-        print(f"   Using CPU instead")
 
     model_name = config.get("model_name", "tfn_classifier")
     
@@ -332,55 +293,10 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
         train_ds, val_ds, test_ds = PG19Dataset.get_splits(file_path, tokenizer_name, max_length, split_frac, text_col)
         print(f"PG19 splits: train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}")
 
-    model = build_model(model_name, model_cfg, data_cfg).to(device)
+    # Build the model using the registry (now handles normalization strategies)
+    model_to_train = build_model(model_name, model_cfg, data_cfg).to(device)
     model_info = registry.get_model_config(model_name)
     task_type = model_info['task_type']
-
-    # --- Conditionally wrap the model with RevIN or PARN based on data config ---
-    model_to_train = model
-    normalization_strategy = config.get('data', {}).get('normalization_strategy')
-    
-    if normalization_strategy == 'instance':
-        # Existing RevIN logic 
-        try:
-            from model.wrappers import RevinModel
-            
-            # Ensure this is a regression task with a valid input_dim
-            if 'input_dim' in model_cfg:
-                model_to_train = RevinModel(base_model=model, num_features=model_cfg['input_dim'])
-                print("✅ Applied RevIN wrapper to the model.")
-            else:
-                print("⚠️  Warning: 'instance' normalization selected, but model is not configured for regression. Skipping RevIN.")
-        except ImportError:
-            print("⚠️  Warning: RevIN wrapper not available. Using base model without wrapper.")
-        except Exception as e:
-            print(f"⚠️  Warning: Failed to apply RevIN wrapper: {e}. Using base model.")
-            
-    elif normalization_strategy == 'parn':
-        try:
-            from model.wrappers import PARNModel
-            parn_mode = config.get('data', {}).get('parn_mode', 'location')
-            original_input_dim = model_cfg['input_dim']
-            
-            # Dynamically calculate the new input dimension
-            if parn_mode == 'location' or parn_mode == 'scale':
-                model_cfg['input_dim'] = original_input_dim * 2
-            elif parn_mode == 'full':
-                model_cfg['input_dim'] = original_input_dim * 3
-
-            print(f"✅ Applying PARN wrapper (mode='{parn_mode}'). Model input_dim adjusted to {model_cfg['input_dim']}.")
-            
-            # Re-build the model with the adjusted input_dim
-            # This ensures the base model has correctly sized layers
-            model = build_model(model_name, model_cfg, data_cfg).to(device)
-            
-            # Wrap the newly built model
-            model_to_train = PARNModel(base_model=model, num_features=original_input_dim, mode=parn_mode)
-            
-        except ImportError:
-            print("⚠️ Warning: PARN wrapper not available. Using base model.")
-        except Exception as e:
-            print(f"⚠️ Warning: Failed to apply PARN wrapper: {e}. Using base model.")
 
     # --- Get scaler from dataset for regression tasks ---
     scaler = getattr(train_ds, 'scaler', None)
@@ -397,7 +313,7 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
         try:
             lr_value = float(lr_value)
         except ValueError:
-            raise ValueError(f"Invalid learning rate value: {lr_value!r}")
+            raise ValueError(f"invalid learning rate: {lr_value!r}")
 
     # Determine checkpoint directory with Kaggle environment detection
     checkpoint_dir = config.get("checkpoint_dir", "checkpoints")
@@ -405,7 +321,7 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
     # If we can't write to the specified directory, try Kaggle working directory
     if os.path.exists('/kaggle/working') and not os.access(checkpoint_dir, os.W_OK):
         checkpoint_dir = '/kaggle/working/tfn_checkpoints'
-        print(f"Warning: Using Kaggle working directory for checkpoints: {checkpoint_dir}")
+        print(f"using kaggle working directory for checkpoints: {checkpoint_dir}")
     
     # Create trainer
     trainer = Trainer(
@@ -430,7 +346,15 @@ def run_training(config: Dict[str, Any], device: str = "auto") -> Dict[str, Any]
     )
 
     # Run training and return history
-    history = trainer.fit()
+    # Pass full config for detailed logging after W&B starts
+    full_config = {
+        "model_name": model_name,
+        "model_info": model_info,
+        "model": model_cfg,
+        "training": train_cfg,
+        "data": data_cfg
+    }
+    history = trainer.fit(full_config=full_config)
     return history
 
 

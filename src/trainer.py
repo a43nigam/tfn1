@@ -244,9 +244,19 @@ class Trainer:
         - For Transformer language modeling: {"inputs": ..., "labels": ..., "attention_mask": ...}
         - Optional "attention_mask" for NLP tasks
         - Optional "positions" for PDE datasets
+        - Optional "calendar_features" for time-based positional encoding
         
         This method assumes the standardized format and provides clear error messages.
         """
+        # --- START FIX ---
+        # Look for calendar features and move them to the correct device
+        calendar_features = batch.get('calendar_features')
+        if calendar_features is not None:
+            calendar_features = {
+                key: val.to(self.device) for key, val in calendar_features.items()
+            }
+        # --- END FIX ---
+
         # Standard format from the unified data pipeline
         if "inputs" in batch and "targets" in batch:
             # Regression/copy tasks
@@ -264,7 +274,7 @@ class Trainer:
             if positions is not None:
                 positions = positions.to(self.device)
             
-            return model_input, targets, positions
+            return model_input, targets, positions, calendar_features
         
         elif "inputs" in batch and "labels" in batch:
             # Classification tasks or Transformer language modeling
@@ -282,7 +292,7 @@ class Trainer:
             if positions is not None:
                 positions = positions.to(self.device)
             
-            return model_input, labels, positions
+            return model_input, labels, positions, calendar_features
         
         else:
             # Enhanced error message with debugging information
@@ -293,27 +303,74 @@ class Trainer:
             error_msg += "  - 'inputs' and 'labels' (classification/transformer tasks)\n"
             error_msg += "  - Optional 'attention_mask' for NLP tasks\n"
             error_msg += "  - Optional 'positions' for PDE datasets\n"
+            error_msg += "  - Optional 'calendar_features' for time-based positional encoding\n"
             error_msg += f"Available keys: {available_keys}"
             raise ValueError(error_msg)
 
     def _fmt(self, val):
         return f"{val:.4f}" if val is not None else "N/A"
+    
+    def _print_detailed_config(self, config: Dict[str, Any]) -> None:
+        """Print detailed configuration information after W&B has started."""
+        
+        # Model info
+        model_info = config.get("model_info", {})
+        print(f"\n🤖 MODEL DETAILS:")
+        print(f"   Type: {config.get('model_name', 'unknown')}")
+        print(f"   Task: {model_info.get('task_type', 'unknown')}")
+        print(f"   Components: {', '.join(model_info.get('components', []))}")
+        print(f"   Evolution Types: {', '.join(model_info.get('evolution_types', []))}")
+        
+        # Model hyperparameters
+        model_cfg = config.get("model", {})
+        print(f"\n⚙️  MODEL HYPERPARAMETERS:")
+        for key, value in model_cfg.items():
+            print(f"   {key}: {value}")
+        
+        # Training hyperparameters
+        train_cfg = config.get("training", {})
+        print(f"\n🎯 TRAINING HYPERPARAMETERS:")
+        for key, value in train_cfg.items():
+            print(f"   {key}: {value}")
+        
+        # Model architecture details
+        print(f"\n🏗️  MODEL ARCHITECTURE:")
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f"   Total Parameters: {total_params:,}")
+        print(f"   Trainable Parameters: {trainable_params:,}")
+        print(f"   Device: {self.device}")
+        
+        # Print model structure (first few layers)
+        print(f"\n📋 MODEL STRUCTURE (first 3 layers):")
+        for i, (name, module) in enumerate(self.model.named_modules()):
+            if i >= 3:  # Only show first 3 layers
+                break
+            if len(list(module.children())) == 0:  # Leaf modules only
+                print(f"   {name}: {module}")
+        
+        print()
 
-    def fit(self, on_epoch_end: Optional[callable] = None) -> Dict[str, Any]:
+    def fit(self, on_epoch_end: Optional[callable] = None, full_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Train the model with optional epoch-end callback.
+        Train the model with optional epoch-end callback and full configuration logging.
         
         Args:
             on_epoch_end: Optional callback function called at the end of each epoch.
                          Signature: on_epoch_end(epoch, metrics, trainer) -> bool
                          Return True to continue training, False to stop early.
+            full_config: Full configuration dictionary to print detailed information
         """
         # Print model name and parameter count at the start
         model_name = getattr(self.model, 'name', self.model.__class__.__name__)
         num_params = sum(p.numel() for p in self.model.parameters())
         print(f"Model: {model_name} | Total parameters: {num_params:,}")
         
-        # Log hyperparameters
+        # Log detailed configuration after W&B has started
+        if full_config and self.log_hyperparams:
+            self._print_detailed_config(full_config)
+        
+        # Log basic hyperparameters
         if self.log_hyperparams:
             print("\nHyperparameters:")
             for key, value in self.hyperparams.items():
@@ -445,20 +502,21 @@ class Trainer:
         n_batches = 0
         
         for batch_idx, batch in enumerate(loader, start=1):
-            # Unpack three items now (x, y, positions)
+            # DEBUG: Print batch keys to verify calendar_features survives DataLoader
+            # print(f"🔍 Trainer._run_epoch: batch.keys() = {list(batch.keys())}")
+            
+            # --- START FIX ---
+            # Unpack four items now (x, y, positions, calendar_features)
             unpacked = self._unpack_batch(batch)
-            if len(unpacked) == 3:
-                x, y, positions = unpacked
-            else:
-                x, y = unpacked
-                positions = None
+            x, y, positions, calendar_features = unpacked
+            # --- END FIX ---
             
             if train:
                 self.optimizer.zero_grad(set_to_none=True)
                 
             with torch.set_grad_enabled(train):
                 # Delegate forward pass and loss calculation to strategy
-                logits, loss = self.strategy.process_forward_pass(self.model, x, y, positions=positions)
+                logits, loss = self.strategy.process_forward_pass(self.model, x, y, positions=positions, calendar_features=calendar_features)
                 
                 if train:
                     loss.backward()

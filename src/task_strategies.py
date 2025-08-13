@@ -16,7 +16,7 @@ class TaskStrategy(ABC):
         pass
 
     @abstractmethod
-    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None, calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Processes the forward pass through the model and returns logits/predictions and loss.
         
@@ -24,6 +24,8 @@ class TaskStrategy(ABC):
             model: The neural network model
             x: Input tensor or tuple of tensors (e.g., input_ids and attention_mask)
             y: Target tensor
+            positions: Optional positional encodings
+            calendar_features: Optional calendar features for time-based positional encoding
             
         Returns:
             Tuple of (logits/predictions, loss)
@@ -52,16 +54,16 @@ class ClassificationStrategy(TaskStrategy):
     def get_criterion(self) -> nn.Module:
         return nn.CrossEntropyLoss()
 
-    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None, calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         # Handle input format (single tensor or tuple with attention mask)
         if isinstance(x, tuple):
-            if positions is not None:
-                logits = model(x[0], positions=positions)
+            if positions is not None or calendar_features is not None:
+                logits = model(x[0], positions=positions, calendar_features=calendar_features)
             else:
                 logits = model(x[0])
         else:
-            if positions is not None:
-                logits = model(x, positions=positions)
+            if positions is not None or calendar_features is not None:
+                logits = model(x, positions=positions, calendar_features=calendar_features)
             else:
                 logits = model(x)
         
@@ -105,10 +107,10 @@ class RegressionStrategy(TaskStrategy):
     def get_criterion(self) -> nn.Module:
         return nn.MSELoss()
 
-    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Pass positions to the model if available
-        if positions is not None:
-            preds = model(x, positions=positions)
+    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None, calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Pass positions and calendar_features to the model if available
+        if positions is not None or calendar_features is not None:
+            preds = model(x, positions=positions, calendar_features=calendar_features)
         else:
             preds = model(x)
         
@@ -146,49 +148,21 @@ class RegressionStrategy(TaskStrategy):
 
     def calculate_metrics(self, preds: torch.Tensor, targets: torch.Tensor, **kwargs) -> Dict[str, float]:
         """
-        Calculate regression metrics with robust denormalization for any scaler type.
-        
-        Args:
-            preds: Model predictions
-            targets: Ground truth targets
-            **kwargs: Additional arguments (ignored, scaler is stored in instance)
-            
-        Returns:
-            Dictionary containing MSE and MAE metrics
+        Calculates regression metrics. Assumes preds and targets are on the same scale.
+        De-normalization should be handled by model wrappers (RevinModel, PARNModel) before this step.
         """
-        from data.timeseries_loader import InstanceNormalizer, FeatureWiseNormalizer
 
         y_flat = targets.view(targets.size(0), -1)
         preds_flat = preds.view(preds.size(0), -1)
         
-        # Default to calculating on the normalized scale
+        # --- START FIX: REMOVE MANUAL DE-NORMALIZATION ---
+        
+        # The wrapper has already de-normalized the predictions. We can now directly calculate metrics.
         mse_val = metrics.mse(preds_flat, y_flat)
         mae_val = metrics.mae(preds_flat, y_flat)
 
-        # Attempt to de-normalize only if a compatible scaler is present
-        if self.scaler is not None:
-            try:
-                if hasattr(self.scaler, 'mean_'): # Handles GlobalStandardScaler
-                    mean = self.scaler.mean_[self.target_col_idx]
-                    std = self.scaler.scale_[self.target_col_idx]
-                elif hasattr(self.scaler, 'feature_means'): # Handles FeatureWiseNormalizer
-                    mean = self.scaler.feature_means[self.target_col_idx]
-                    std = self.scaler.feature_stds[self.target_col_idx]
-                else: # Handles InstanceNormalizer or unknown scalers
-                    mean, std = None, None
-
-                if mean is not None and std is not None:
-                    preds_denorm = preds_flat * std + mean
-                    y_denorm = y_flat * std + mean
-                    mse_val = metrics.mse(preds_denorm, y_denorm)
-                    mae_val = metrics.mae(preds_denorm, y_denorm)
-                else:
-                    warnings.warn(
-                        "Calculating regression metrics on a normalized scale. De-normalization not supported for this scaler.",
-                        UserWarning, stacklevel=2
-                    )
-            except Exception as e:
-                warnings.warn(f"Failed to de-normalize metrics due to an error: {e}", UserWarning, stacklevel=2)
+        # The old logic for manual de-normalization with self.scaler has been removed.
+        # --- END FIX ---
 
         return {"mse": mse_val, "mae": mae_val}
 
@@ -223,11 +197,11 @@ class PDEStrategy(TaskStrategy):
         """Use MSE loss for PDE solving tasks."""
         return nn.MSELoss()
 
-    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None, calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """Process forward pass with explicit position support for PDE datasets."""
-        # Pass positions to the model if available
-        if positions is not None:
-            preds = model(x, positions=positions)
+        # Pass positions and calendar_features to the model if available
+        if positions is not None or calendar_features is not None:
+            preds = model(x, positions=positions, calendar_features=calendar_features)
         else:
             preds = model(x)
         
@@ -327,16 +301,16 @@ class LanguageModelingStrategy(TaskStrategy):
     def get_criterion(self) -> nn.Module:
         return nn.CrossEntropyLoss()
 
-    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def process_forward_pass(self, model: nn.Module, x: Union[torch.Tensor, Tuple[torch.Tensor, ...]], y: torch.Tensor, positions: Optional[torch.Tensor] = None, calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         # For LM, x may be a tuple (input_ids, attention_mask)
         if isinstance(x, tuple):
-            if positions is not None:
-                logits = model(x[0], positions=positions)
+            if positions is not None or calendar_features is not None:
+                logits = model(x[0], positions=positions, calendar_features=calendar_features)
             else:
                 logits = model(x[0])
         else:
-            if positions is not None:
-                logits = model(x, positions=positions)
+            if positions is not None or calendar_features is not None:
+                logits = model(x, positions=positions, calendar_features=calendar_features)
             else:
                 logits = model(x)
         

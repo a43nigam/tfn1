@@ -67,6 +67,25 @@ def heat_equation_transformer_collate(batch: List[Dict[str, torch.Tensor]], conf
         if positions is not None:
             result['positions'] = positions
         
+        # --- START FIX: Add calendar features handling ---
+        # Check if calendar features are present in the first item
+        if 'calendar_features' in batch[0]:
+            # If they exist, collate them into a single dictionary of tensors
+            calendar_features_collated = {}
+            # Get the keys from the first sample's calendar_features
+            feature_keys = batch[0]['calendar_features'].keys()
+            
+            for key in feature_keys:
+                # Stack the tensors for this feature from all items in the batch
+                calendar_features_collated[key] = torch.stack(
+                    [item['calendar_features'][key] for item in batch]
+                )
+            
+                    # Add the collated dictionary to the final result
+        result['calendar_features'] = calendar_features_collated
+        # print(f"🔧 heat_equation_transformer_collate: Added calendar_features with keys: {list(calendar_features_collated.keys())}")
+        # --- END FIX ---
+        
         print(f"✅ Successfully quantized batch: {input_tokens.shape} -> {input_tokens.dtype}")
         return result
         
@@ -94,11 +113,32 @@ def language_modeling_collate(batch: List[Dict[str, torch.Tensor]]) -> Dict[str,
     attention_mask = torch.stack([item['attention_mask'] for item in batch])
     labels = torch.stack([item['labels'] for item in batch])
     
-    return {
+    batch_dict = {
         'inputs': inputs,
         'attention_mask': attention_mask,
         'labels': labels,
     }
+    
+    # --- START FIX: Add calendar features handling ---
+    # Check if calendar features are present in the first item
+    if 'calendar_features' in batch[0]:
+        # If they exist, collate them into a single dictionary of tensors
+        calendar_features_collated = {}
+        # Get the keys from the first sample's calendar_features
+        feature_keys = batch[0]['calendar_features'].keys()
+        
+        for key in feature_keys:
+            # Stack the tensors for this feature from all items in the batch
+            calendar_features_collated[key] = torch.stack(
+                [item['calendar_features'][key] for item in batch]
+            )
+        
+        # Add the collated dictionary to the final batch dictionary
+        batch_dict['calendar_features'] = calendar_features_collated
+        # print(f"🔧 language_modeling_collate: Added calendar_features with keys: {list(calendar_features_collated.keys())}")
+    # --- END FIX ---
+    
+    return batch_dict
 
 
 def synthetic_seq_collate(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
@@ -110,10 +150,31 @@ def synthetic_seq_collate(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, tor
     # The synthetic loader provides 'targets', which the trainer maps to the 'y' variable (labels)
     labels = torch.stack([item['targets'] for item in batch])
     
-    return {
+    batch_dict = {
         'inputs': inputs,
         'labels': labels,
     }
+    
+    # --- START FIX: Add calendar features handling ---
+    # Check if calendar features are present in the first item
+    if 'calendar_features' in batch[0]:
+        # If they exist, collate them into a single dictionary of tensors
+        calendar_features_collated = {}
+        # Get the keys from the first sample's calendar_features
+        feature_keys = batch[0]['calendar_features'].keys()
+        
+        for key in feature_keys:
+            # Stack the tensors for this feature from all items in the batch
+            calendar_features_collated[key] = torch.stack(
+                [item['calendar_features'][key] for item in batch]
+            )
+        
+        # Add the collated dictionary to the final batch dictionary
+        batch_dict['calendar_features'] = calendar_features_collated
+        # print(f"🔧 synthetic_seq_collate: Added calendar_features with keys: {list(calendar_features_collated.keys())}")
+    # --- END FIX ---
+    
+    return batch_dict
 
 
 def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: str = "copy") -> Dict[str, torch.Tensor]:
@@ -188,16 +249,42 @@ def pad_collate(batch: List[Dict[str, torch.Tensor]], pad_idx: int = 0, task: st
                 # For copy tasks, input and target have same shape
                 tgt[i, :seq_len] = target_data
     
+    # --- START FIX: Add calendar features handling ---
+    # Initialize the final batch dictionary
+    batch_dict = {}
+    
     # Return standardized format
     if task == "classification":
         # For classification, we have inputs and labels
-        batch_dict = {"inputs": src}
+        batch_dict["inputs"] = src
         # Stack labels
         labels = torch.stack([item["labels"] for item in batch])
         batch_dict["labels"] = labels
     else:
         # For copy/regression, we have inputs and targets
-        batch_dict = {"inputs": src, "targets": tgt}
+        batch_dict["inputs"] = src
+        batch_dict["targets"] = tgt
+    
+    # Now, check if calendar features are present in the first item
+    if 'calendar_features' in batch[0]:
+        # If they exist, collate them into a single dictionary of tensors
+        calendar_features_collated = {}
+        # Get the keys from the first sample's calendar_features
+        feature_keys = batch[0]['calendar_features'].keys()
+        
+        for key in feature_keys:
+            # Stack the tensors for this feature from all items in the batch
+            calendar_features_collated[key] = torch.stack(
+                [item['calendar_features'][key] for item in batch]
+            )
+        
+        # Add the collated dictionary to the final batch dictionary
+        batch_dict['calendar_features'] = calendar_features_collated
+        # print(f"🔧 pad_collate: Added calendar_features with keys: {list(calendar_features_collated.keys())}")
+    else:
+        # print(f"ℹ️  pad_collate: No calendar_features found in batch")
+        pass
+    # --- END FIX ---
     
     return batch_dict
 

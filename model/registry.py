@@ -143,8 +143,8 @@ MODEL_REGISTRY = {
         'optional_params': [
             'pos_dim', 'kernel_type', 'evolution_type', 'interference_type', 'grid_size', 'num_heads', 'dropout',
             'num_steps', 'max_seq_len',
-            # --- ADD NEW PARAMS HERE ---
-            'projector_type', 'proj_dim', 'positional_embedding_strategy'
+            'projector_type', 'proj_dim', 'positional_embedding_strategy',
+            'calendar_features', 'feature_cardinalities'
         ],
         'defaults': {
             'num_layers': 1,

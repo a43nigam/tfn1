@@ -379,14 +379,153 @@ def create_enhanced_tfn_model(vocab_size: int,
     )
 
 
+class EnhancedTFNRegressorCore(nn.Module):
+    """The core processing block of the TFN Regressor."""
+    def __init__(self, 
+                 embed_dim: int,
+                 output_dim: int,
+                 output_len: int,
+                 num_layers: int,
+                 pos_dim: int = 1,
+                 kernel_type: str = "rbf",
+                 evolution_type: str = "diffusion",
+                 interference_type: str = "standard",
+                 grid_size: int = 100,
+                 projector_type: str = 'standard',
+                 proj_dim: int = 64,
+                 num_heads: int = 8,
+                 dropout: float = 0.1,
+                 num_steps: int = 4,
+                 *,
+                 max_seq_len: int = 512):
+        """
+        Initialize the core TFN regressor.
+        
+        Args:
+            embed_dim: Dimension of embeddings
+            output_dim: Output feature dimension
+            output_len: Output sequence length
+            num_layers: Number of TFN layers
+            pos_dim: Dimension of position space
+            kernel_type: Type of kernel for field projection
+            evolution_type: Type of evolution for field evolution
+            interference_type: Type of interference
+            grid_size: Number of grid points
+            projector_type: Type of field projector ('standard' or 'low_rank')
+            proj_dim: Projection dimension for low-rank projector
+            num_heads: Number of attention heads
+            dropout: Dropout rate
+            num_steps: Number of evolution steps
+            max_seq_len: Maximum sequence length
+        """
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.output_dim = output_dim
+        self.output_len = output_len
+        self.num_layers = num_layers
+        self.max_seq_len = max_seq_len
+        
+        # Enhanced TFN layers - pure processing blocks
+        self.layers = nn.ModuleList([
+            EnhancedTFNLayer(
+                embed_dim=embed_dim,
+                pos_dim=pos_dim,
+                kernel_type=kernel_type,
+                evolution_type=evolution_type,
+                interference_type=interference_type,
+                grid_size=grid_size,
+                projector_type=projector_type,
+                proj_dim=proj_dim,
+                num_steps=num_steps,
+                dropout=dropout,
+            )
+            for i in range(num_layers)
+        ])
+        
+        # Output projection for regression
+        self.output_proj = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(embed_dim // 2, output_dim)
+        )
+        
+        # Layer normalization
+        self.final_norm = nn.LayerNorm(embed_dim)
+        
+        # Initialize weights
+        self._init_weights()
+        
+    def _init_weights(self):
+        """Initialize model weights."""
+        # Output projection initialization
+        for layer in self.output_proj:
+            if isinstance(layer, nn.Linear):
+                nn.init.normal_(layer.weight, 0, 0.02)
+                nn.init.zeros_(layer.bias)
+        
+    def forward(self, x: torch.Tensor, positions: Optional[torch.Tensor] = None, calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> torch.Tensor:
+        """
+        Forward pass through the core TFN regressor.
+        
+        Args:
+            x: Input embeddings [B, N, embed_dim] (already projected and with positional embeddings)
+            positions: Token positions [B, N, P] (optional, will be generated if None)
+            calendar_features: Optional calendar features for time-based positional embeddings
+            
+        Returns:
+            Regression outputs [B, output_len, output_dim]
+        """
+        batch_size, seq_len, embed_dim = x.shape
+        
+        # Generate position coordinates for TFN layers if not provided
+        if positions is None:
+            # Use normalized sequential positions
+            positions = torch.arange(seq_len, device=x.device, dtype=torch.float32)
+            positions = positions / (seq_len - 1)  # Normalize to [0, 1]
+            positions = positions.unsqueeze(0).expand(batch_size, -1)  # [B, N]
+            positions = positions.unsqueeze(-1)  # [B, N, 1]
+        
+        # Pass the position-aware embeddings through the layers
+        for layer in self.layers:
+            x = layer(x, positions, calendar_features=calendar_features)
+        
+        # Final normalization
+        x = self.final_norm(x)
+        
+        # Output projection for regression
+        # Take the last output_len tokens for prediction
+        if seq_len >= self.output_len:
+            x = x[:, -self.output_len:, :]  # [B, output_len, embed_dim]
+        else:
+            # Pad if sequence is shorter than output_len
+            padding = torch.zeros(batch_size, self.output_len - seq_len, self.embed_dim, 
+                                device=x.device, dtype=x.dtype)
+            x = torch.cat([x, padding], dim=1)  # [B, output_len, embed_dim]
+        
+        outputs = self.output_proj(x)  # [B, output_len, output_dim]
+        
+        return outputs
+    
+    def get_physics_constraints(self) -> Dict[str, torch.Tensor]:
+        """
+        Get stability metrics from all layers.
+        
+        Returns:
+            Dictionary of stability metrics
+        """
+        constraints = {}
+        
+        for i, layer in enumerate(self.layers):
+            layer_constraints = layer.get_physics_constraints()
+            for key, value in layer_constraints.items():
+                constraints[f"layer_{i}_{key}"] = value
+        
+        return constraints
+
+
 class EnhancedTFNRegressor(nn.Module):
-    """
-    Enhanced TFN Model for Regression Tasks.
-    
-    A regression-compatible version of the enhanced TFN that accepts
-    continuous input features instead of discrete tokens.
-    """
-    
+    """The complete TFN Regressor model with a standard input projection."""
     def __init__(self, 
                  input_dim: int,
                  embed_dim: int,
@@ -398,14 +537,11 @@ class EnhancedTFNRegressor(nn.Module):
                  evolution_type: str = "diffusion",
                  interference_type: str = "standard",
                  grid_size: int = 100,
-                 # --- ADD THE NEW PARAMETERS TO THE SIGNATURE ---
                  projector_type: str = 'standard',
                  proj_dim: int = 64,
                  positional_embedding_strategy: str = "continuous",
-                 # --- ADD CALENDAR FEATURES SUPPORT ---
                  calendar_features: Optional[List[str]] = None,
                  feature_cardinalities: Optional[Dict[str, int]] = None,
-                 # ---
                  num_heads: int = 8,
                  dropout: float = 0.1,
                  num_steps: int = 4,
@@ -446,47 +582,33 @@ class EnhancedTFNRegressor(nn.Module):
         # Input projection (for continuous features)
         self.input_proj = nn.Linear(input_dim, embed_dim)
         
-        # --- ADDED: Positional embedding strategy in parent model ---
+        # Positional embedding strategy
         self.pos_embedding = create_positional_embedding_strategy(
             strategy_name=positional_embedding_strategy,
             max_len=max_seq_len,
             embed_dim=embed_dim,
-            calendar_features=calendar_features,  # Now supported
-            feature_cardinalities=feature_cardinalities,  # Now supported
+            calendar_features=calendar_features,
+            feature_cardinalities=feature_cardinalities,
         )
-        # --- END ADDED ---
         
-        # Enhanced TFN layers - now pure processing blocks
-        self.layers = nn.ModuleList([
-            EnhancedTFNLayer(
+        # Instantiate the core model
+        self.core = EnhancedTFNRegressorCore(
                 embed_dim=embed_dim,
+            output_dim=output_dim,
+            output_len=output_len,
+            num_layers=num_layers,
                 pos_dim=pos_dim,
                 kernel_type=kernel_type,
                 evolution_type=evolution_type,
                 interference_type=interference_type,
                 grid_size=grid_size,
-                # --- PASS NEW PARAMS ---
                 projector_type=projector_type,
                 proj_dim=proj_dim,
-                # --- END PASS ---
+            num_heads=num_heads,
+            dropout=dropout,
                 num_steps=num_steps,
-                dropout=dropout,
-                # --- REMOVED: No more positional embedding parameters ---
-                # --- END REMOVED ---
-            )
-            for i in range(num_layers)
-        ])
-        
-        # Output projection for regression
-        self.output_proj = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(embed_dim // 2, output_dim)
+            max_seq_len=max_seq_len
         )
-        
-        # Layer normalization
-        self.final_norm = nn.LayerNorm(embed_dim)
         
         # Initialize weights
         self._init_weights()
@@ -497,20 +619,21 @@ class EnhancedTFNRegressor(nn.Module):
         nn.init.normal_(self.input_proj.weight, 0, 0.02)
         nn.init.zeros_(self.input_proj.bias)
         
-        # --- UPDATED: Position embedding initialization is now handled by the parent model ---
-        # Positional embeddings are created and initialized in __init__
-        # --- END UPDATED ---
-        
-        # Output projection initialization
-        for layer in self.output_proj:
-            if isinstance(layer, nn.Linear):
-                nn.init.normal_(layer.weight, 0, 0.02)
-                nn.init.zeros_(layer.bias)
-        
     def forward(self, 
                 inputs: torch.Tensor,  # [B, N, input_dim] continuous features
                 positions: Optional[torch.Tensor] = None,
-                calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> torch.Tensor:
+                calendar_features: Optional[Dict[str, torch.Tensor]] = None,
+                # --- START FIX: Add a new argument for precomputed embeddings ---
+                precomputed_embeddings: Optional[torch.Tensor] = None
+                # --- END FIX ---
+               ) -> torch.Tensor:
+        
+        # DEBUG: Print calendar_features to confirm they arrive at model's forward pass
+        # if calendar_features is not None:
+        #     print(f"🔍 EnhancedTFNRegressor.forward: calendar_features.keys() = {list(calendar_features.keys())}")
+        # else:
+        #     print(f"⚠️  EnhancedTFNRegressor.forward: calendar_features = None")
+        pass
         """
         Forward pass through enhanced TFN regressor.
         
@@ -518,62 +641,33 @@ class EnhancedTFNRegressor(nn.Module):
             inputs: Input continuous features [B, N, input_dim]
             positions: Token positions [B, N, P] (optional, will be generated if None)
             calendar_features: Optional calendar features for time-based positional embeddings
+            precomputed_embeddings: Optional precomputed embeddings [B, N, embed_dim] (for wrapper use)
             
         Returns:
             Regression outputs [B, output_len, output_dim]
         """
-        batch_size, seq_len, input_dim = inputs.shape
-        
-        # Input projection
-        embeddings = self.input_proj(inputs)  # [B, N, embed_dim]
-        
-        # Generate position coordinates for TFN layers
-        if positions is None:
-            # Use normalized sequential positions
-            positions = torch.arange(seq_len, device=inputs.device, dtype=torch.float32)
-            positions = positions / (seq_len - 1)  # Normalize to [0, 1]
-            positions = positions.unsqueeze(0).expand(batch_size, -1)  # [B, N]
-            positions = positions.unsqueeze(-1)  # [B, N, 1]
-        
-        # --- FIXED: Add positional embeddings in parent model ---
-        # Create positional embeddings and add them to token embeddings
-        pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
-        x = embeddings + pos_emb  # Combine them ONCE here
-        # --- END FIXED ---
-        
-        # Pass the final, position-aware embeddings to the layers
-        for layer in self.layers:
-            x = layer(x, positions)  # The layer now uses x as is, without adding more pos_emb
-        
-        # Final normalization
-        x = self.final_norm(x)
-        
-        # Output projection for regression
-        # Take the last output_len tokens for prediction
-        if seq_len >= self.output_len:
-            x = x[:, -self.output_len:, :]  # [B, output_len, embed_dim]
+        # --- START FIX: Add logic to use precomputed embeddings if provided ---
+        if precomputed_embeddings is not None:
+            x = precomputed_embeddings
         else:
-            # Pad if sequence is shorter than output_len
-            padding = torch.zeros(batch_size, self.output_len - seq_len, self.embed_dim, 
-                                device=x.device, dtype=x.dtype)
-            x = torch.cat([x, padding], dim=1)  # [B, output_len, embed_dim]
+            # This is the standard path for RevIN or no wrapper
+            batch_size, seq_len, input_dim = inputs.shape
+            
+            # Input projection
+            embeddings = self.input_proj(inputs)  # [B, N, embed_dim]
+            
+            # Generate position coordinates for TFN layers
+            if positions is None:
+                # Use normalized sequential positions
+                positions = torch.arange(seq_len, device=inputs.device, dtype=torch.float32)
+                positions = positions / (seq_len - 1)  # Normalize to [0, 1]
+                positions = positions.unsqueeze(0).expand(batch_size, -1)  # [B, N]
+                positions = positions.unsqueeze(-1)  # [B, N, 1]
+            
+            # Create positional embeddings and add them to token embeddings
+            pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
+            x = embeddings + pos_emb  # Combine them ONCE here
+        # --- END FIX ---
         
-        outputs = self.output_proj(x)  # [B, output_len, output_dim]
-        
-        return outputs
-    
-    def get_physics_constraints(self) -> Dict[str, torch.Tensor]:
-        """
-        Get stability metrics from all layers.
-        
-        Returns:
-            Dictionary of stability metrics
-        """
-        constraints = {}
-        
-        for i, layer in enumerate(self.layers):
-            layer_constraints = layer.get_physics_constraints()
-            for key, value in layer_constraints.items():
-                constraints[f"layer_{i}_{key}"] = value
-        
-        return constraints 
+        # Pass to the core model
+        return self.core(x, positions, calendar_features=calendar_features) 
