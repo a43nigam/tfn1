@@ -12,9 +12,6 @@ from data.nlp_loader import NLPDataset
 from data.jena_loader import JenaClimateDataset
 from data.stock_loader import StockMarketDataset
 from data.glue_loader import GLUEDataset
-from data.arxiv_loader import ArxivDataset
-from data.pg19_loader import PG19Dataset
-from data.wikitext_loader import WikiTextDataset
 from data.pde_loader import PDEDataset, DarcyFlowDataset, load_pde_data
 from data_pipeline import SyntheticCopyDataset
 from data.synthetic_task_loader import SyntheticTaskDataset
@@ -246,57 +243,42 @@ DATASET_REGISTRY = {
         'description': 'GLUE benchmark datasets for NLP classification tasks'
     },
     
-    'arxiv': {
-        'class': ArxivDataset,
-        'task_type': 'classification',
-        'required_params': ['csv_path'],
-        'optional_params': ['max_length', 'tokenizer_name'],
-        'defaults': {
-            'csv_path': 'data/arxiv_sample.csv',
-            'max_length': 512,
-            'tokenizer_name': 'bert-base-uncased'
-        },
-        'factory_method': None,  # Direct instantiation
-        'split_method': None,    # No splits for arxiv
-        'description': 'ArXiv paper classification dataset'
-    },
-    
     # ============================================================================
     # LANGUAGE MODELING DATASETS
     # ============================================================================
     
-    'pg19': {
-        'class': PG19Dataset,
-        'task_type': 'language_modeling',
-        'required_params': ['data_dir'],
-        'optional_params': ['max_length', 'tokenizer_name'],
-        'defaults': {
-            'data_dir': 'data/pg19',
-            'max_length': 512,
-            'tokenizer_name': 'gpt2'
-        },
-        'factory_method': None,  # Direct instantiation
-        'split_method': None,    # Uses split parameter
-        'description': 'Project Gutenberg dataset for language modeling'
-    },
+    # 'pg19': {
+    #     'class': PG19Dataset,
+    #     'task_type': 'language_modeling',
+    #     'required_params': ['data_dir'],
+    #     'optional_params': ['max_length', 'tokenizer_name'],
+    #     'defaults': {
+    #         'data_dir': 'data/pg19',
+    #         'max_length': 512,
+    #         'tokenizer_name': 'gpt2'
+    #     },
+    #     'factory_method': None,  # Direct instantiation
+    #     'split_method': None,    # Uses split parameter
+    #     'description': 'Project Gutenberg dataset for language modeling'
+    # },
     
-    'wikitext': {
-        'class': WikiTextDataset,
-        'task_type': 'language_modeling',
-        'required_params': ['wikitext_dataset_name'],
-        'optional_params': ['tokenizer_name', 'max_length', 'text_col', 'use_streaming', 'max_samples'],
-        'defaults': {
-            'wikitext_dataset_name': 'wikitext-2-raw-v1',
-            'tokenizer_name': 'gpt2',
-            'max_length': 512,
-            'text_col': 'text',
-            'use_streaming': False,
-            'max_samples': None
-        },
-        'factory_method': None,  # Direct instantiation
-        'split_method': None,    # Uses split parameter
-        'description': 'WikiText dataset for language modeling'
-    },
+    # 'wikitext': {
+    #     'class': WikiTextDataset,
+    #     'task_type': 'language_modeling',
+    #     'required_params': ['wikitext_dataset_name'],
+    #     'optional_params': ['tokenizer_name', 'max_length', 'text_col', 'use_streaming', 'max_samples'],
+    #     'defaults': {
+    #         'wikitext_dataset_name': 'wikitext-2-raw-v1',
+    #         'tokenizer_name': 'gpt2',
+    #         'max_length': 512,
+    #         'text_col': 'text',
+    #         'use_streaming': False,
+    #         'max_samples': None
+    #     },
+    #     'factory_method': None,  # Direct instantiation
+    #     'split_method': None,    # Uses split parameter
+    #     'description': 'WikiText dataset for language modeling'
+    # },
     
     # ============================================================================
     # PDE DATASETS

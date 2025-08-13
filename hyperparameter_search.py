@@ -475,9 +475,7 @@ class HyperparameterSearch:
                 parameters = self.search_space.get_trial_params(trial_idx)
                 trial_id = f"trial_{trial_counter:03d}"
                 
-                print(f"\nTrial {trial_counter}: {model_name} with parameters:")
-                for param, value in parameters.items():
-                    print(f"  {param}: {value}")
+                print(f"\nTrial {trial_counter}: {model_name}")
                 print("  Training progress:")
                 
                 # Step 4: Implement resilient trial execution
@@ -688,6 +686,14 @@ class HyperparameterSearch:
         else:
             print(f"    W&B disabled for this trial")
         
+        # Determine checkpoint directory with Kaggle environment detection
+        checkpoint_dir = trial_config.get("checkpoint_dir", "checkpoints")
+        
+        # If we can't write to the specified directory, try Kaggle working directory
+        if os.path.exists('/kaggle/working') and not os.access(checkpoint_dir, os.W_OK):
+            checkpoint_dir = '/kaggle/working/tfn_checkpoints'
+            print(f"    Using Kaggle working directory for checkpoints: {checkpoint_dir}")
+        
         trainer = Trainer(
             model=model,
             train_loader=train_loader,
@@ -706,7 +712,10 @@ class HyperparameterSearch:
             # Pass the W&B parameters
             use_wandb=use_wandb,
             project_name=project_name,
-            experiment_name=experiment_name
+            experiment_name=experiment_name,
+            
+            # Pass the checkpoint directory
+            checkpoint_dir=checkpoint_dir
         )
         
         # Define epoch-end callback for hyperparameter search
@@ -763,8 +772,17 @@ class HyperparameterSearch:
         
         print(f"    Starting training for {trainer.epochs} epochs...")
         
-        # Use the Trainer's fit method with our callback
-        trainer.fit(on_epoch_end=on_epoch_end)
+        # Create full config for detailed logging after W&B starts
+        full_config = {
+            "model_name": model_name,
+            "model_info": model_info,
+            "model": trial_config.get('model', {}),
+            "training": training_config,
+            "data": trial_config.get('data', {})
+        }
+        
+        # Use the Trainer's fit method with our callback and full config
+        trainer.fit(on_epoch_end=on_epoch_end, full_config=full_config)
         
         # Get FLOPS stats if tracking was enabled
         flops_stats = None

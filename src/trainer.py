@@ -71,13 +71,13 @@ class Trainer:
         if self.save_checkpoints:
             try:
                 os.makedirs(self.checkpoint_dir, exist_ok=True)
-                print(f"✅ Checkpoint directory created/verified: {self.checkpoint_dir}")
+                print(f"Checkpoint directory created/verified: {self.checkpoint_dir}")
             except PermissionError:
-                print(f"❌ Permission denied creating checkpoint directory: {self.checkpoint_dir}")
+                print(f"Permission denied creating checkpoint directory: {self.checkpoint_dir}")
                 print("   Consider setting checkpoint_dir to a writable location in your config")
                 raise
             except Exception as e:
-                print(f"❌ Error creating checkpoint directory {self.checkpoint_dir}: {e}")
+                print(f"Error creating checkpoint directory {self.checkpoint_dir}: {e}")
                 raise
         
         self.history = {
@@ -315,34 +315,34 @@ class Trainer:
         
         # Model info
         model_info = config.get("model_info", {})
-        print(f"\n🤖 MODEL DETAILS:")
-        print(f"   Type: {config.get('model_name', 'unknown')}")
-        print(f"   Task: {model_info.get('task_type', 'unknown')}")
-        print(f"   Components: {', '.join(model_info.get('components', []))}")
-        print(f"   Evolution Types: {', '.join(model_info.get('evolution_types', []))}")
+        print(f"\n model:")
+        print(f"   type: {config.get('model_name', 'unknown')}")
+        print(f"   task: {model_info.get('task_type', 'unknown')}")
+        print(f"   components: {', '.join(model_info.get('components', []))}")
+        print(f"   evolution types: {', '.join(model_info.get('evolution_types', []))}")
         
         # Model hyperparameters
         model_cfg = config.get("model", {})
-        print(f"\n⚙️  MODEL HYPERPARAMETERS:")
+        print(f"\n model params:")
         for key, value in model_cfg.items():
             print(f"   {key}: {value}")
         
         # Training hyperparameters
         train_cfg = config.get("training", {})
-        print(f"\n🎯 TRAINING HYPERPARAMETERS:")
+        print(f"\n training params:")
         for key, value in train_cfg.items():
             print(f"   {key}: {value}")
         
         # Model architecture details
-        print(f"\n🏗️  MODEL ARCHITECTURE:")
+        print(f"\n architecture:")
         total_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        print(f"   Total Parameters: {total_params:,}")
-        print(f"   Trainable Parameters: {trainable_params:,}")
-        print(f"   Device: {self.device}")
+        print(f"   total params: {total_params:,}")
+        print(f"   trainable params: {trainable_params:,}")
+        print(f"   device: {self.device}")
         
         # Print model structure (first few layers)
-        print(f"\n📋 MODEL STRUCTURE (first 3 layers):")
+        print(f"\n model structure (first 3 layers):")
         for i, (name, module) in enumerate(self.model.named_modules()):
             if i >= 3:  # Only show first 3 layers
                 break
@@ -372,7 +372,7 @@ class Trainer:
         
         # Log basic hyperparameters
         if self.log_hyperparams:
-            print("\nHyperparameters:")
+            print("\nhyperparameters:")
             for key, value in self.hyperparams.items():
                 print(f"  {key}: {value}")
             print()

@@ -162,7 +162,7 @@ def print_training_info(cfg: Dict[str, Any], model_name: str, model_info: Dict[s
     
     # Dataset info
     data_cfg = cfg["data"]
-    print(f"\n📊 DATASET:")
+    print(f"\n DATASET:")
     print(f"   Name: {data_cfg.get('dataset_name', 'unknown')}")
     print(f"   File: {data_cfg.get('file_path', data_cfg.get('csv_path', 'N/A'))}")
     if 'input_len' in data_cfg:
@@ -172,9 +172,9 @@ def print_training_info(cfg: Dict[str, Any], model_name: str, model_info: Dict[s
     if 'max_length' in data_cfg:
         print(f"   Max Length: {data_cfg['max_length']}")
     
-    print("\n" + "="*80)
-    print("🎬 STARTING TRAINING...")
-    print("="*80 + "\n")
+    print("\n" + "-"*30)
+    print(" training")
+    print("-"*30 + "\n")
 
 def validate_config_parameters(config: Dict[str, Any], args: argparse.Namespace) -> None:
     """
