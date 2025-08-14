@@ -18,7 +18,9 @@ def load_pde_data(
     file_path: str,
     initial_condition_key: str = 'a',
     solution_key: str = 'u',
-    grid_key: str = 'x'
+    grid_key: str = 'x',
+    grid_points: Optional[int] = None,  # New parameter
+    domain: List[float] = [0.0, 1.0]   # New parameter
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Load and preprocess PDE data from a .mat file.
@@ -31,6 +33,8 @@ def load_pde_data(
         initial_condition_key: Key for initial conditions in .mat file
         solution_key: Key for solutions in .mat file
         grid_key: Key for spatial grid in .mat file
+        grid_points: Number of grid points for uniform grid generation (if grid_key not found)
+        domain: Domain bounds [min, max] for uniform grid generation (if grid_key not found)
         
     Returns:
         Tuple of (initial_conditions, solutions, grid) as torch tensors
@@ -41,7 +45,6 @@ def load_pde_data(
     # Extract data
     initial_conditions = raw_data[initial_condition_key]
     solutions = raw_data[solution_key]
-    grid_data = raw_data[grid_key]
     
     # Handle different possible orientations for initial_conditions
     if initial_conditions.ndim == 2:
@@ -69,26 +72,41 @@ def load_pde_data(
     if solutions.shape[1] != n_spatial_points:
         raise ValueError(f"Spatial points mismatch: initial_conditions={n_spatial_points}, solutions={solutions.shape[1]}")
     
-    # Handle grid data
-    if grid_data.ndim == 1:
-        grid = torch.tensor(grid_data, dtype=torch.float32)
-    elif grid_data.ndim == 2:
-        if grid_data.shape[0] == 1:  # Shape: [1, n_spatial_points] -> squeeze
-            grid = torch.tensor(grid_data.squeeze(), dtype=torch.float32)
-        elif grid_data.shape[1] == 1:  # Shape: [n_spatial_points, 1] -> squeeze
-            grid = torch.tensor(grid_data.squeeze(), dtype=torch.float32)
-        else:  # For 2D grids like Darcy flow: [n_spatial_points, 2]
+    # --- REVISED GRID HANDLING LOGIC ---
+    if grid_key in raw_data:
+        # If the key exists, use it as before
+        grid_data = raw_data[grid_key]
+        
+        # Handle grid data
+        if grid_data.ndim == 1:
             grid = torch.tensor(grid_data, dtype=torch.float32)
+        elif grid_data.ndim == 2:
+            if grid_data.shape[0] == 1:  # Shape: [1, n_spatial_points] -> squeeze
+                grid = torch.tensor(grid_data.squeeze(), dtype=torch.float32)
+            elif grid_data.shape[1] == 1:  # Shape: [n_spatial_points, 1] -> squeeze
+                grid = torch.tensor(grid_data.squeeze(), dtype=torch.float32)
+            else:  # For 2D grids like Darcy flow: [n_spatial_points, 2]
+                grid = torch.tensor(grid_data, dtype=torch.float32)
+        else:
+            raise ValueError(f"Expected 1D or 2D grid, got shape {grid_data.shape}")
+        
+        # Ensure grid is 1D for 1D problems or 2D for 2D problems
+        if grid.ndim == 2 and grid.shape[1] == 1:
+            grid = grid.squeeze(-1)
+        
+        # Validate grid shape
+        if grid.shape[0] != n_spatial_points:
+            raise ValueError(f"Grid points mismatch: {n_spatial_points} vs {grid.shape[0]}")
+            
     else:
-        raise ValueError(f"Expected 1D or 2D grid, got shape {grid_data.shape}")
-    
-    # Ensure grid is 1D for 1D problems or 2D for 2D problems
-    if grid.ndim == 2 and grid.shape[1] == 1:
-        grid = grid.squeeze(-1)
-    
-    # Validate grid shape
-    if grid.shape[0] != n_spatial_points:
-        raise ValueError(f"Grid points mismatch: {n_spatial_points} vs {grid.shape[0]}")
+        # If the key is missing, generate the grid programmatically
+        if grid_points is None:
+            # Infer grid points from the spatial dimension of the data
+            grid_points = raw_data[initial_condition_key].shape[1]
+
+        print(f"⚠️  Grid key '{grid_key}' not found in .mat file. Generating a uniform spatial grid with {grid_points} points over the domain {domain}.")
+        grid = torch.linspace(domain[0], domain[1], grid_points, dtype=torch.float32)
+    # --- END REVISED LOGIC ---
     
     # Convert to torch tensors
     initial_conditions = torch.tensor(initial_conditions, dtype=torch.float32)
@@ -240,7 +258,10 @@ class PDEDataset(Dataset):
         target_timestep: int = 10,
         split_frac: Optional[Dict[str, float]] = None,
         normalize: bool = True,
-        normalization_strategy: str = 'global'
+        normalization_strategy: str = 'global',
+        grid_points: Optional[int] = None,  # Add this parameter
+        domain: List[float] = [0.0, 1.0],   # Add this parameter
+        **kwargs  # Add kwargs to handle other potential params
     ) -> Tuple['PDEDataset', 'PDEDataset', 'PDEDataset']:
         """
         Factory method to create train, val, and test splits.
@@ -256,13 +277,21 @@ class PDEDataset(Dataset):
             split_frac: Custom split fractions
             normalize: Whether to normalize the data
             normalization_strategy: Normalization strategy
+            grid_points: Number of grid points for uniform grid generation (if grid_key not found)
+            domain: Domain bounds [min, max] for uniform grid generation (if grid_key not found)
+            **kwargs: Additional keyword arguments
             
         Returns:
             Tuple of (train_dataset, val_dataset, test_dataset)
         """
-        # Load data once
+        # Load data once, passing the new grid parameters through
         initial_conditions, solutions, grid = load_pde_data(
-            file_path, initial_condition_key, solution_key, grid_key
+            file_path,
+            initial_condition_key=kwargs.get('initial_condition_key', initial_condition_key),
+            solution_key=kwargs.get('solution_key', solution_key),
+            grid_key=kwargs.get('grid_key', grid_key),
+            grid_points=grid_points,  # Pass it here
+            domain=domain            # Pass it here
         )
         
         # Determine split sizes
@@ -373,11 +402,20 @@ class DarcyFlowDataset(PDEDataset):
         target_timestep: int = 0,
         split_frac: Optional[Dict[str, float]] = None,
         normalize: bool = True,
-        normalization_strategy: str = 'global'
+        normalization_strategy: str = 'global',
+        grid_points: Optional[int] = None,  # Add this parameter
+        domain: List[float] = [0.0, 1.0]   # Add this parameter
     ) -> Tuple['DarcyFlowDataset', 'DarcyFlowDataset', 'DarcyFlowDataset']:
         """Factory method for Darcy flow datasets."""
         # Load data once
-        initial_conditions, solutions, grid = load_pde_data(file_path, 'a', 'u', 'x')
+        initial_conditions, solutions, grid = load_pde_data(
+            file_path, 
+            'a', 
+            'u', 
+            'x',
+            grid_points=grid_points,  # Pass it here
+            domain=domain            # Pass it here
+        )
         
         # Determine split sizes
         if split_frac is None:

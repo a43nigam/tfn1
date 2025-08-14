@@ -556,7 +556,7 @@ class EnhancedTFNRegressorCore(nn.Module):
 
 
 class EnhancedTFNRegressor(nn.Module):
-    """The complete TFN Regressor model with a standard input projection."""
+    """The complete TFN Regressor model with learned fusion of input and positional embeddings."""
     def __init__(self, 
                  input_dim: int,
                  embed_dim: int,
@@ -605,6 +605,8 @@ class EnhancedTFNRegressor(nn.Module):
         Note:
             Positional embedding dropout (0.2) is applied to prevent overfitting
             on specific temporal patterns and improve generalization.
+            Token and positional embeddings are fused using a learned projection layer
+            instead of simple addition, promoting robust joint representation learning.
         """
         super().__init__()
         self.input_dim = input_dim
@@ -616,6 +618,12 @@ class EnhancedTFNRegressor(nn.Module):
         
         # Input projection (for continuous features)
         self.input_proj = nn.Linear(input_dim, embed_dim)
+        
+        # --- NEW: Fusion layer for combining embeddings ---
+        # Takes concatenated token and positional embeddings and projects to embed_dim
+        # This forces joint representation learning instead of simple addition
+        self.fusion_layer = nn.Linear(embed_dim * 2, embed_dim)
+        # --- END NEW ---
         
         # Positional embedding strategy
         self.pos_embedding = create_positional_embedding_strategy(
@@ -660,6 +668,12 @@ class EnhancedTFNRegressor(nn.Module):
         nn.init.normal_(self.input_proj.weight, 0, 0.02)
         nn.init.zeros_(self.input_proj.bias)
         
+        # --- NEW: Fusion layer initialization ---
+        # Initialize fusion layer weights for optimal joint representation learning
+        nn.init.normal_(self.fusion_layer.weight, 0, 0.02)
+        nn.init.zeros_(self.fusion_layer.bias)
+        # --- END NEW ---
+        
     def forward(self, 
                 inputs: torch.Tensor,  # [B, N, input_dim] continuous features
                 positions: Optional[torch.Tensor] = None,
@@ -690,6 +704,8 @@ class EnhancedTFNRegressor(nn.Module):
             
         Note:
             Positional embedding dropout is applied to prevent overfitting on temporal patterns.
+            Token and positional embeddings are fused using a learned projection layer instead
+            of simple addition, promoting robust joint representation learning.
         """
         # --- START FIX: Add logic to use precomputed embeddings if provided ---
         if precomputed_embeddings is not None:
@@ -709,11 +725,68 @@ class EnhancedTFNRegressor(nn.Module):
                 positions = positions.unsqueeze(0).expand(batch_size, -1)  # [B, N]
                 positions = positions.unsqueeze(-1)  # [B, N, 1]
             
-            # Create positional embeddings and add them to token embeddings
+            # Create positional embeddings and apply dropout
             pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
             # Apply dropout to positional embeddings to prevent overfitting on temporal patterns
-            x = embeddings + self.pos_emb_dropout(pos_emb)  # Combine them ONCE here
+            pos_emb = self.pos_emb_dropout(pos_emb)
+            
+            # --- REVISED: Use fusion layer instead of simple addition ---
+            # Concatenate along the feature dimension to force joint representation learning
+            fused_embeddings = torch.cat([embeddings, pos_emb], dim=-1)  # [B, N, embed_dim * 2]
+            
+            # Project the fused representation back to the model's working dimension
+            # This forces every element to be a weighted sum of both token and positional features
+            x = self.fusion_layer(fused_embeddings)  # [B, N, embed_dim]
+            # --- END REVISED ---
         # --- END FIX ---
         
         # Pass to the core model
         return self.core(x, positions, calendar_features=calendar_features) 
+
+
+class EnhancedTFNClassifier(nn.Module):
+    """ TFN Classifier for irregular time series, using the enhanced core. """
+    def __init__(self, input_dim: int, embed_dim: int, num_classes: int, num_layers: int, **kwargs):
+        super().__init__()
+        # Input projection for continuous features
+        self.input_proj = nn.Linear(input_dim, embed_dim)
+        
+        # Positional embedding strategy must be passed via kwargs
+        self.pos_embedding = create_positional_embedding_strategy(
+            embed_dim=embed_dim, **kwargs
+        )
+        
+        # Reuse the powerful TFN core
+        self.core = EnhancedTFNRegressorCore(
+            embed_dim=embed_dim, num_layers=num_layers,
+            output_dim=1, output_len=1, # Dummy values, not used by head
+            **kwargs
+        )
+
+        # New classification head with dropout
+        dropout = kwargs.get('dropout', 0.1)
+        self.head = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(embed_dim // 2, num_classes)
+        )
+
+    def forward(self, inputs: torch.Tensor, positions: torch.Tensor, attention_mask: torch.Tensor, **kwargs):
+        # 1. Project and add positional embeddings
+        embeddings = self.input_proj(inputs)
+        pos_emb = self.pos_embedding(positions, **kwargs)
+        x = embeddings + pos_emb
+        
+        # 2. Process with TFN core layers
+        # The core's forward pass doesn't need the attention_mask
+        sequence_output = self.core(x, positions, **kwargs) # [B, N, D]
+        
+        # 3. Masked Average Pooling
+        # Use the attention mask to average only over valid, non-padded time steps
+        mask_expanded = attention_mask.unsqueeze(-1).expand_as(sequence_output)
+        pooled_output = torch.sum(sequence_output * mask_expanded, dim=1) / torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
+        
+        # 4. Final classification
+        logits = self.head(pooled_output) # [B, num_classes]
+        return logits 

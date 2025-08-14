@@ -8,7 +8,7 @@ parameters, evolution types, and compatibility information.
 from typing import Dict, List, Any, Optional
 # Legacy classifier/regressor aliases were removed; map to core TFN
 from .tfn_unified import TFN, UnifiedTFN
-from .tfn_enhanced import EnhancedTFNModel, EnhancedTFNRegressor
+from .tfn_enhanced import EnhancedTFNModel, EnhancedTFNRegressor, EnhancedTFNClassifier
 from .tfn_pytorch import ImageTFN
 from .baselines import (
     TransformerBaseline, PerformerBaseline, LSTMBaseline, CNNBaseline,
@@ -114,23 +114,24 @@ MODEL_REGISTRY = {
     # ============================================================================
     
     'enhanced_tfn_classifier': {
-        'class': EnhancedTFNModel,
+        'class': EnhancedTFNClassifier,  # <-- UPDATED CLASS
         'task_type': 'classification',
-        'evolution_types': ['diffusion', 'wave', 'schrodinger', 'cnn'],
-        'components': ['field_projection', 'field_interference', 'field_evolution', 'field_sampling'],
-        'required_params': ['vocab_size', 'embed_dim', 'kernel_type', 'interference_type'],
+        'required_params': ['input_dim', 'embed_dim', 'num_classes', 'num_layers'],
         'optional_params': [
-            'num_layers', 'evolution_type', 'grid_size', 'num_heads', 'dropout',
-            'positional_embedding_strategy', 'calendar_features', 'feature_cardinalities', 'max_seq_len'
+            'pos_dim', 'kernel_type', 'evolution_type', 'interference_type', 'grid_size', 'num_heads',
+            'dropout', 'num_steps', 'max_seq_len', 'projector_type', 'proj_dim',
+            'positional_embedding_strategy'
         ],
         'defaults': {
-            'num_layers': 2,
-            'kernel_type': 'rbf',
-            'evolution_type': 'diffusion',
-            'interference_type': 'standard',
-            'grid_size': 100,
+            'num_layers': 4,
+            'kernel_type': 'film_learnable',
+            'evolution_type': 'cnn',
+            'interference_type': 'causal',
+            'grid_size': 128,
             'num_heads': 8,
-            'dropout': 0.1
+            'dropout': 0.3,
+            'max_seq_len': 512,
+            'positional_embedding_strategy': 'continuous'
         }
     },
     
