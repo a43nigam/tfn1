@@ -129,6 +129,13 @@ class TFN(BaseSequenceModel):
             calendar_features=calendar_features,
             feature_cardinalities=feature_cardinalities,
         )
+        
+        # --- ADD POSITIONAL EMBEDDING DROPOUT ---
+        # Separate dropout for positional embeddings to prevent overfitting
+        # on specific temporal patterns and improve generalization
+        self.pos_emb_dropout = nn.Dropout(0.2)  # Good starting point for temporal regularization
+        # --- END POSITIONAL EMBEDDING DROPOUT ---
+        
         # --- END ADDED ---
 
         # ------------------------------------------------------------------
@@ -179,7 +186,7 @@ class TFN(BaseSequenceModel):
     # Forward
     # ------------------------------------------------------------------
     def forward(self, inputs: torch.Tensor, positions: Optional[torch.Tensor] = None, 
-                calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> torch.Tensor:  # type: ignore
+                calendar_features: Optional[Dict[str, torch.Tensor]] = None, **kwargs) -> torch.Tensor:  # type: ignore
         """Forward pass.
 
         Parameters
@@ -191,6 +198,10 @@ class TFN(BaseSequenceModel):
             Optional positions ``[B, N, 1]``; auto-generated if *None*.
         calendar_features:
             Optional calendar features for time-based embeddings.
+            
+        Note:
+            Positional embedding dropout (0.2) is applied to prevent overfitting
+            on specific temporal patterns and improve generalization.
         """
         B, N = inputs.shape[:2]
 
@@ -219,6 +230,8 @@ class TFN(BaseSequenceModel):
         # --- FIXED: Add positional embeddings in parent model ---
         # Create positional embeddings and add them to token embeddings
         pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
+        # Apply dropout to positional embeddings to prevent overfitting on temporal patterns
+        pos_emb = self.pos_emb_dropout(pos_emb)
         x = embeddings + pos_emb  # Combine them ONCE here
         # --- END FIXED ---
         

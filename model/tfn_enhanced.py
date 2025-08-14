@@ -58,7 +58,7 @@ class EnhancedTFNLayer(nn.Module):
             projector_type: Type of field projector ('standard' or 'low_rank')
             proj_dim: Projection dimension for low-rank projector
             num_steps: Number of evolution steps
-            dropout: Dropout rate
+            dropout: Dropout rate (applied to both field and output)
             layer_norm_eps: Epsilon for layer normalization
             **kwargs: Additional keyword arguments
         """
@@ -104,6 +104,13 @@ class EnhancedTFNLayer(nn.Module):
         # Output projection
         self.output_proj = nn.Linear(embed_dim, embed_dim)
         self.dropout = nn.Dropout(dropout)
+        
+        # --- ADD FIELD DROPOUT ---
+        # Field dropout for regularization of continuous field representations
+        # This prevents overfitting on specific field patterns during evolution
+        self.field_dropout = nn.Dropout(dropout)  # Reuse main dropout rate for consistency
+        # --- END FIELD DROPOUT ---
+        
         # --- REMOVED POSITIONAL EMBEDDING LOGIC ---
         # Positional embeddings are now handled by the parent model
         # This layer expects position-aware inputs
@@ -125,6 +132,10 @@ class EnhancedTFNLayer(nn.Module):
             
         Returns:
             Enhanced embeddings [B, N, D]
+            
+        Note:
+            Field dropout is applied after field projection to prevent overfitting
+            on specific continuous field patterns during evolution dynamics.
         """
         batch_size, num_tokens, embed_dim = x.shape
         if grid_points is None:
@@ -137,6 +148,13 @@ class EnhancedTFNLayer(nn.Module):
 
         # Step 1: Field Projection
         field = self.field_projector(x, positions, grid_points)  # [B, M, D]
+        
+        # --- APPLY FIELD DROPOUT ---
+        # Apply dropout directly to the continuous field to prevent overfitting
+        # on specific field patterns during evolution dynamics
+        field = self.field_dropout(field)
+        # --- END FIELD DROPOUT ---
+        
         # Step 2: Unified Field Dynamics (evolution + interference + constraints)
         field_evolved = self.unified_dynamics(field, positions)
         # Step 3: Field Sampling
@@ -215,6 +233,10 @@ class EnhancedTFNModel(nn.Module):
             calendar_features: Calendar features for time-based positional embeddings
             feature_cardinalities: Cardinality of each calendar feature
             max_seq_len: Maximum sequence length
+            
+        Note:
+            Positional embedding dropout (0.2) is applied to prevent overfitting
+            on specific temporal patterns and improve generalization.
         """
         super().__init__()
         self.vocab_size = vocab_size
@@ -285,16 +307,21 @@ class EnhancedTFNModel(nn.Module):
         
     def forward(self, 
                 input_ids: torch.Tensor,  # [B, N] token indices
-                positions: Optional[torch.Tensor] = None) -> torch.Tensor:
+                positions: Optional[torch.Tensor] = None,
+                **kwargs) -> torch.Tensor:
         """
         Forward pass through enhanced TFN model.
         
         Args:
             input_ids: Input token indices [B, N]
             positions: Token positions [B, N, P] (optional)
+            **kwargs: Additional keyword arguments passed through from wrappers
             
         Returns:
             Logits for next token prediction [B, N, vocab_size]
+            
+        Note:
+            Positional embedding dropout is applied to prevent overfitting on temporal patterns.
         """
         batch_size, seq_len = input_ids.shape
         
@@ -313,6 +340,9 @@ class EnhancedTFNModel(nn.Module):
         pos_indices = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
         pos_embeddings = self.pos_embedding(pos_indices)  # Use factory pattern
         pos_embeddings = pos_embeddings.expand(batch_size, -1, -1)  # [B, N, D]
+        
+        # Apply dropout to positional embeddings to prevent overfitting on temporal patterns
+        pos_embeddings = self.pos_emb_dropout(pos_embeddings)
         
         # Combine token and position embeddings
         x = embeddings + pos_embeddings
@@ -464,7 +494,7 @@ class EnhancedTFNRegressorCore(nn.Module):
                 nn.init.normal_(layer.weight, 0, 0.02)
                 nn.init.zeros_(layer.bias)
         
-    def forward(self, x: torch.Tensor, positions: Optional[torch.Tensor] = None, calendar_features: Optional[Dict[str, torch.Tensor]] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, positions: Optional[torch.Tensor] = None, calendar_features: Optional[Dict[str, torch.Tensor]] = None, **kwargs) -> torch.Tensor:
         """
         Forward pass through the core TFN regressor.
         
@@ -472,6 +502,7 @@ class EnhancedTFNRegressorCore(nn.Module):
             x: Input embeddings [B, N, embed_dim] (already projected and with positional embeddings)
             positions: Token positions [B, N, P] (optional, will be generated if None)
             calendar_features: Optional calendar features for time-based positional embeddings
+            **kwargs: Additional keyword arguments passed through from wrappers
             
         Returns:
             Regression outputs [B, output_len, output_dim]
@@ -567,9 +598,13 @@ class EnhancedTFNRegressor(nn.Module):
             calendar_features: Calendar features for time-based positional embeddings
             feature_cardinalities: Cardinality of each calendar feature
             num_heads: Number of attention heads
-            dropout: Dropout rate
+            dropout: Dropout rate (applied to field and output layers)
             num_steps: Number of evolution steps
             max_seq_len: Maximum sequence length
+            
+        Note:
+            Positional embedding dropout (0.2) is applied to prevent overfitting
+            on specific temporal patterns and improve generalization.
         """
         super().__init__()
         self.input_dim = input_dim
@@ -590,6 +625,12 @@ class EnhancedTFNRegressor(nn.Module):
             calendar_features=calendar_features,
             feature_cardinalities=feature_cardinalities,
         )
+        
+        # --- ADD POSITIONAL EMBEDDING DROPOUT ---
+        # Separate dropout for positional embeddings to prevent overfitting
+        # on specific temporal patterns and improve generalization
+        self.pos_emb_dropout = nn.Dropout(0.2)  # Good starting point for temporal regularization
+        # --- END POSITIONAL EMBEDDING DROPOUT ---
         
         # Instantiate the core model
         self.core = EnhancedTFNRegressorCore(
@@ -624,9 +665,9 @@ class EnhancedTFNRegressor(nn.Module):
                 positions: Optional[torch.Tensor] = None,
                 calendar_features: Optional[Dict[str, torch.Tensor]] = None,
                 # --- START FIX: Add a new argument for precomputed embeddings ---
-                precomputed_embeddings: Optional[torch.Tensor] = None
+                precomputed_embeddings: Optional[torch.Tensor] = None,
                 # --- END FIX ---
-               ) -> torch.Tensor:
+                **kwargs) -> torch.Tensor:
         
         # DEBUG: Print calendar_features to confirm they arrive at model's forward pass
         # if calendar_features is not None:
@@ -642,9 +683,13 @@ class EnhancedTFNRegressor(nn.Module):
             positions: Token positions [B, N, P] (optional, will be generated if None)
             calendar_features: Optional calendar features for time-based positional embeddings
             precomputed_embeddings: Optional precomputed embeddings [B, N, embed_dim] (for wrapper use)
+            **kwargs: Additional keyword arguments passed through from wrappers
             
         Returns:
             Regression outputs [B, output_len, output_dim]
+            
+        Note:
+            Positional embedding dropout is applied to prevent overfitting on temporal patterns.
         """
         # --- START FIX: Add logic to use precomputed embeddings if provided ---
         if precomputed_embeddings is not None:
@@ -666,7 +711,8 @@ class EnhancedTFNRegressor(nn.Module):
             
             # Create positional embeddings and add them to token embeddings
             pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
-            x = embeddings + pos_emb  # Combine them ONCE here
+            # Apply dropout to positional embeddings to prevent overfitting on temporal patterns
+            x = embeddings + self.pos_emb_dropout(pos_emb)  # Combine them ONCE here
         # --- END FIX ---
         
         # Pass to the core model

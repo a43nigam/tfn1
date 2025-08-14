@@ -251,10 +251,22 @@ class TrainableTFNLayer(nn.Module):
             feature_cardinalities=feature_cardinalities
         )
         
+        # --- ADD POSITIONAL EMBEDDING DROPOUT ---
+        # Separate dropout for positional embeddings to prevent overfitting
+        # on specific temporal patterns and improve generalization
+        self.pos_emb_dropout = nn.Dropout(dropout)  # Reuse main dropout rate for consistency
+        # --- END POSITIONAL EMBEDDING DROPOUT ---
+        
         # Standard transformer components
         self.layer_norm1 = nn.LayerNorm(embed_dim, eps=layer_norm_eps)
         self.layer_norm2 = nn.LayerNorm(embed_dim, eps=layer_norm_eps)
         self.dropout = nn.Dropout(dropout)
+        
+        # --- ADD FIELD DROPOUT ---
+        # Field dropout for regularization of continuous field representations
+        # This prevents overfitting on specific field patterns during evolution
+        self.field_dropout = nn.Dropout(dropout)  # Reuse main dropout rate for consistency
+        # --- END FIELD DROPOUT ---
         
         # Learnable grid (optional)
         self.learnable_grid = nn.Parameter(torch.linspace(0, 1, grid_size))
@@ -283,6 +295,12 @@ class TrainableTFNLayer(nn.Module):
         
         Returns:
             updated_embeddings: [B, N, D] updated embeddings with residual connection
+            
+        Note:
+            Field dropout is applied after field projection to prevent overfitting
+            on specific continuous field patterns during evolution.
+            Positional embedding dropout is applied when add_pos_emb=True to prevent
+            overfitting on temporal patterns.
         """
         B, N, D = embeddings.shape
         P = positions.shape[-1]
@@ -290,6 +308,8 @@ class TrainableTFNLayer(nn.Module):
         # Optionally incorporate positional information ---------------------
         if add_pos_emb:
             pos_emb = self.pos_embeddings(positions, calendar_features=calendar_features)
+            # Apply dropout to positional embeddings to prevent overfitting on temporal patterns
+            pos_emb = self.pos_emb_dropout(pos_emb)
             x = embeddings + pos_emb
         else:
             # Caller has already added positional information
@@ -308,6 +328,12 @@ class TrainableTFNLayer(nn.Module):
         # 1. Project tokens to field
         kernels = self.kernels(grid_points, positions)  # [B, N, M]
         field = torch.einsum('bnm,bnd->bmd', kernels, x)  # [B, M, D]
+        
+        # --- APPLY FIELD DROPOUT ---
+        # Apply dropout directly to the continuous field to prevent overfitting
+        # on specific field patterns during evolution
+        field = self.field_dropout(field)
+        # --- END FIELD DROPOUT ---
         
         # 2. Evolve field
         evolved_field = self.evolution(field, grid_points)  # [B, M, D]

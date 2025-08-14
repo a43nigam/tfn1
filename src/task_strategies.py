@@ -148,20 +148,74 @@ class RegressionStrategy(TaskStrategy):
 
     def calculate_metrics(self, preds: torch.Tensor, targets: torch.Tensor, **kwargs) -> Dict[str, float]:
         """
-        Calculates regression metrics. Assumes preds and targets are on the same scale.
-        De-normalization should be handled by model wrappers (RevinModel, PARNModel) before this step.
+        Calculates regression metrics with automatic denormalization for global normalization.
+        
+        For global normalization (no wrappers), this method automatically denormalizes
+        predictions and targets before computing metrics to ensure fair comparison with SOTA baselines.
+        
+        For PARN/ReVIN wrappers, denormalization is already handled by the wrapper.
         """
 
         y_flat = targets.view(targets.size(0), -1)
         preds_flat = preds.view(preds.size(0), -1)
         
-        # --- START FIX: REMOVE MANUAL DE-NORMALIZATION ---
-        
-        # The wrapper has already de-normalized the predictions. We can now directly calculate metrics.
-        mse_val = metrics.mse(preds_flat, y_flat)
-        mae_val = metrics.mae(preds_flat, y_flat)
-
-        # The old logic for manual de-normalization with self.scaler has been removed.
+        # --- START FIX: ADD DENORMALIZATION FOR GLOBAL NORMALIZATION ---
+        # Check if we have a scaler available for denormalization
+        if self.scaler is not None:
+            try:
+                # Handle different scaler types for robust denormalization
+                if hasattr(self.scaler, 'mean_') and hasattr(self.scaler, 'scale_'):
+                    # GlobalStandardScaler case
+                    mean = self.scaler.mean_[self.target_col_idx]
+                    std = self.scaler.scale_[self.target_col_idx]
+                elif hasattr(self.scaler, 'feature_means') and hasattr(self.scaler, 'feature_stds'):
+                    # FeatureWiseNormalizer case
+                    mean = self.scaler.feature_means[self.target_col_idx]
+                    std = self.scaler.feature_stds[self.target_col_idx]
+                elif hasattr(self.scaler, 'mean') and hasattr(self.scaler, 'std'):
+                    # InstanceNormalizer case (though this shouldn't happen for global norm)
+                    mean = self.scaler.mean[self.target_col_idx]
+                    std = self.scaler.std[self.target_col_idx]
+                else:
+                    # Unknown scaler type, fall back to normalized metrics
+                    mean, std = None, None
+                
+                if mean is not None and std is not None:
+                    # Denormalize predictions and targets
+                    preds_denorm = preds_flat * std + mean
+                    y_denorm = y_flat * std + mean
+                    
+                    # Compute metrics on denormalized scale for fair comparison with SOTA
+                    mse_val = metrics.mse(preds_denorm, y_denorm)
+                    mae_val = metrics.mae(preds_denorm, y_denorm)
+                    
+                    # Add note that metrics are denormalized
+                    if 'denormalized' not in kwargs:
+                        kwargs['denormalized'] = True
+                else:
+                    # Fall back to normalized metrics if denormalization not possible
+                    mse_val = metrics.mse(preds_flat, y_flat)
+                    mae_val = metrics.mae(preds_flat, y_flat)
+                    warnings.warn(
+                        "Could not denormalize metrics. Computing on normalized scale.",
+                        UserWarning, stacklevel=2
+                    )
+            except Exception as e:
+                # Fall back to normalized metrics if denormalization fails
+                mse_val = metrics.mse(preds_flat, y_flat)
+                mae_val = metrics.mae(preds_flat, y_flat)
+                warnings.warn(
+                    f"Failed to denormalize metrics due to error: {e}. Computing on normalized scale.",
+                    UserWarning, stacklevel=2
+                )
+        else:
+            # No scaler available, compute metrics on normalized scale
+            mse_val = metrics.mse(preds_flat, y_flat)
+            mae_val = metrics.mae(preds_flat, y_flat)
+            warnings.warn(
+                "No scaler available for denormalization. Metrics computed on normalized scale.",
+                UserWarning, stacklevel=2
+            )
         # --- END FIX ---
 
         return {"mse": mse_val, "mae": mae_val}

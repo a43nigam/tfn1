@@ -296,6 +296,10 @@ class PARNModel(nn.Module):
         base_model: The base TFN model (e.g., EnhancedTFNRegressor)
         num_features: Original input feature dimension
         mode: PARN normalization mode ('location', 'scale', 'full')
+        
+    Note:
+        Positional embedding dropout (0.2) is applied to prevent overfitting
+        on specific temporal patterns and improve generalization.
     """
     def __init__(self, 
                  base_model: nn.Module, 
@@ -318,6 +322,13 @@ class PARNModel(nn.Module):
         # The wrapper also needs access to the positional embedding strategy
         # It's best to take it from the base model to ensure consistency
         self.pos_embedding = self.base_model.pos_embedding
+        
+        # --- ADD POSITIONAL EMBEDDING DROPOUT ---
+        # Separate dropout for positional embeddings to prevent overfitting
+        # on specific temporal patterns and improve generalization
+        self.pos_emb_dropout = nn.Dropout(0.2)  # Good starting point for temporal regularization
+        # --- END POSITIONAL EMBEDDING DROPOUT ---
+        
         # --- END FIX ---
         
         self.name = f"PARNModel({base_model.__class__.__name__}, mode='{mode}')"
@@ -348,6 +359,9 @@ class PARNModel(nn.Module):
         positions = kwargs.get('positions')
         calendar_features = kwargs.get('calendar_features')
         pos_emb = self.pos_embedding(positions, calendar_features=calendar_features)
+        
+        # Apply dropout to positional embeddings to prevent overfitting on temporal patterns
+        pos_emb = self.pos_emb_dropout(pos_emb)
         
         precomputed = embeddings + pos_emb
 
